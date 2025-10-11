@@ -1,4 +1,4 @@
-name: Video Blend CI (with Drive download)
+name: Video Blend CI (smart Drive sync)
 
 on:
   workflow_dispatch:
@@ -9,17 +9,18 @@ on:
       - 'background_videos/**'
 
 env:
-  # ✅ رابط Google Drive الثابت للخلفيات
+  # ✅ رابط Google Drive للخلفيات
   DRIVE_FOLDER_URL: "https://drive.google.com/drive/folders/1JYb3bI1PFJIHCPm8Vwm26b6vX7w5gL_C?usp=sharing"
 
 jobs:
   blend:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install apt packages
+      - name: Install system dependencies
         run: sudo apt-get update && sudo apt-get install -y ffmpeg libgl1
 
       - name: Setup Python
@@ -27,19 +28,55 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Install Python deps
-        run: pip install --upgrade pip && pip install -r requirements.txt
+      - name: Install Python packages
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install gdown
 
-      - name: Prepare directories
+      - name: Prepare folders
         run: |
           mkdir -p input_videos background_videos outputs
 
-      - name: Download Google Drive folder into background_videos
+      - name: Compare & download missing videos from Drive
         run: |
-          echo "Downloading Drive folder from: ${DRIVE_FOLDER_URL}"
-          gdown --folder "${DRIVE_FOLDER_URL}" -O background_videos
+          echo "📁 Checking for missing videos in Google Drive..."
+          python3 - <<'PYCODE'
+import subprocess, os, json, re
 
-      - name: Run blender
+drive_url = os.environ["DRIVE_FOLDER_URL"]
+
+# استخراج ID من الرابط
+match = re.search(r'/folders/([a-zA-Z0-9_-]+)', drive_url)
+if not match:
+    raise SystemExit("❌ لم يتم العثور على Folder ID في الرابط.")
+folder_id = match.group(1)
+
+# الحصول على قائمة الملفات في Google Drive (باستخدام gdown)
+print("🔍 Fetching file list from Drive...")
+result = subprocess.run(["gdown", "--folder", drive_url, "--dry-run", "--json"], capture_output=True, text=True)
+try:
+    files = json.loads(result.stdout)
+except:
+    files = []
+
+# جلب أسماء الملفات الموجودة محلياً
+local_files = set(os.listdir("background_videos")) if os.path.exists("background_videos") else set()
+
+# تحديد الملفات المفقودة فقط
+missing = [f["name"] for f in files if f["name"] not in local_files]
+if not missing:
+    print("✅ جميع الخلفيات موجودة بالفعل.")
+else:
+    print(f"⬇️ جاري تحميل {len(missing)} ملف جديد من Google Drive:")
+    for name in missing:
+        print("  -", name)
+    # تحميل فقط الملفات الناقصة
+    for name in missing:
+        subprocess.run(["gdown", f"https://drive.google.com/uc?id={f['id']}", "-O", os.path.join("background_videos", name)])
+PYCODE
+
+      - name: Run video blend script
         run: |
           python3 video_blend_headless.py \
             --input1_dir input_videos \
@@ -47,10 +84,9 @@ jobs:
             --output_dir outputs \
             --bg_per_effect 3 \
             --compress true \
-            --crf 28 \
-            --drive_folder_url "${DRIVE_FOLDER_URL}"
+            --crf 28
 
-      - name: Upload outputs
+      - name: Upload results
         uses: actions/upload-artifact@v4
         with:
           name: blended-videos

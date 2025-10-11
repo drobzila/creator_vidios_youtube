@@ -1,3 +1,30 @@
+name: Video Blend CI (Drive sync + blending)
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'video_blend_headless.py'
+      - 'input_videos/**'
+      - 'background_videos/**'
+
+jobs:
+  blend:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update && sudo apt-get install -y ffmpeg libgl1
+          pip install --upgrade pip
+          pip install -U gdown moviepy
+
+      - name: Prepare directories
+        run: mkdir -p input_videos background_videos outputs
+
       - name: Smart sync from Google Drive
         env:
           DRIVE_FOLDER_URL: https://drive.google.com/drive/folders/1JYb3bI1PFJIHCPm8Vwm26b6vX7w5gL_C?usp=sharing
@@ -13,13 +40,10 @@ if not drive_url:
 folder = "background_videos"
 os.makedirs(folder, exist_ok=True)
 
-# استخراج Folder ID
 m = re.search(r'/folders/([a-zA-Z0-9_-]+)', drive_url)
 if not m:
     sys.exit("❌ رابط Google Drive غير صالح")
-folder_id = m.group(1)
 
-# الحصول على قائمة الملفات بدون تحميلها (gdown >= 5.2 يدعم --dry-run --json)
 print("📁 Fetching file list from Drive...")
 proc = subprocess.run(["gdown", "--folder", drive_url, "--dry-run", "--json"],
                       capture_output=True, text=True)
@@ -45,7 +69,7 @@ if not missing:
 else:
     print(f"⬇️ سيتم تحميل {len(missing)} ملف جديد...")
     for f in missing:
-        name = f["name"].replace(" ", "_")  # تجنب المسافات
+        name = f["name"].replace(" ", "_")
         file_id = f["id"]
         try:
             print(f"  → تحميل {name} ...")
@@ -58,7 +82,7 @@ else:
 print("✅ المزامنة مع Google Drive تمت بنجاح.")
 PYCODE
 
-      - name: Run video blend script
+      - name: Run video blending
         run: |
           python3 video_blend_headless.py \
             --input1_dir input_videos \

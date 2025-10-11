@@ -1,79 +1,61 @@
-name: Video Blend CI (smart Drive sync)
-
-on:
-  workflow_dispatch:
-  push:
-    paths:
-      - 'video_blend_headless.py'
-      - 'input_videos/**'
-      - 'background_videos/**'
-
-env:
-  # ✅ رابط Google Drive للخلفيات
-  DRIVE_FOLDER_URL: "https://drive.google.com/drive/folders/1JYb3bI1PFJIHCPm8Vwm26b6vX7w5gL_C?usp=sharing"
-
-jobs:
-  blend:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg libgl1
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
-
-      - name: Install Python packages
+      - name: Smart sync from Google Drive
+        env:
+          DRIVE_FOLDER_URL: https://drive.google.com/drive/folders/1JYb3bI1PFJIHCPm8Vwm26b6vX7w5gL_C?usp=sharing
         run: |
-          pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install gdown
-
-      - name: Prepare folders
-        run: |
-          mkdir -p input_videos background_videos outputs
-
-      - name: Compare & download missing videos from Drive
-        run: |
-          echo "📁 Checking for missing videos in Google Drive..."
+          echo "🔍 Checking missing files in Google Drive..."
           python3 - <<'PYCODE'
-import subprocess, os, json, re
+import os, re, subprocess, json, sys
 
-drive_url = os.environ["DRIVE_FOLDER_URL"]
+drive_url = os.environ.get("DRIVE_FOLDER_URL", "").strip()
+if not drive_url:
+    sys.exit("❌ DRIVE_FOLDER_URL مفقود")
 
-# استخراج ID من الرابط
-match = re.search(r'/folders/([a-zA-Z0-9_-]+)', drive_url)
-if not match:
-    raise SystemExit("❌ لم يتم العثور على Folder ID في الرابط.")
-folder_id = match.group(1)
+folder = "background_videos"
+os.makedirs(folder, exist_ok=True)
 
-# الحصول على قائمة الملفات في Google Drive (باستخدام gdown)
-print("🔍 Fetching file list from Drive...")
-result = subprocess.run(["gdown", "--folder", drive_url, "--dry-run", "--json"], capture_output=True, text=True)
+# استخراج Folder ID
+m = re.search(r'/folders/([a-zA-Z0-9_-]+)', drive_url)
+if not m:
+    sys.exit("❌ رابط Google Drive غير صالح")
+folder_id = m.group(1)
+
+# الحصول على قائمة الملفات بدون تحميلها (gdown >= 5.2 يدعم --dry-run --json)
+print("📁 Fetching file list from Drive...")
+proc = subprocess.run(["gdown", "--folder", drive_url, "--dry-run", "--json"],
+                      capture_output=True, text=True)
+
+if proc.returncode != 0:
+    print(proc.stderr)
+    sys.exit("⚠️ فشل في تنفيذ gdown --dry-run")
+
 try:
-    files = json.loads(result.stdout)
-except:
+    files = json.loads(proc.stdout)
+except Exception as e:
+    print("⚠️ لم يتمكن من قراءة القائمة:", e)
     files = []
 
-# جلب أسماء الملفات الموجودة محلياً
-local_files = set(os.listdir("background_videos")) if os.path.exists("background_videos") else set()
+if not files:
+    sys.exit("❌ لم يتم العثور على ملفات في المجلد!")
 
-# تحديد الملفات المفقودة فقط
-missing = [f["name"] for f in files if f["name"] not in local_files]
+local = set(os.listdir(folder))
+missing = [f for f in files if f["name"] not in local]
+
 if not missing:
-    print("✅ جميع الخلفيات موجودة بالفعل.")
+    print("✅ لا توجد ملفات ناقصة.")
 else:
-    print(f"⬇️ جاري تحميل {len(missing)} ملف جديد من Google Drive:")
-    for name in missing:
-        print("  -", name)
-    # تحميل فقط الملفات الناقصة
-    for name in missing:
-        subprocess.run(["gdown", f"https://drive.google.com/uc?id={f['id']}", "-O", os.path.join("background_videos", name)])
+    print(f"⬇️ سيتم تحميل {len(missing)} ملف جديد...")
+    for f in missing:
+        name = f["name"].replace(" ", "_")  # تجنب المسافات
+        file_id = f["id"]
+        try:
+            print(f"  → تحميل {name} ...")
+            subprocess.run(
+                ["gdown", f"https://drive.google.com/uc?id={file_id}", "-O", os.path.join(folder, name)],
+                check=True
+            )
+        except subprocess.CalledProcessError:
+            print(f"⚠️ فشل تحميل {name}، سيتم تخطيه.")
+print("✅ المزامنة مع Google Drive تمت بنجاح.")
 PYCODE
 
       - name: Run video blend script

@@ -1,23 +1,28 @@
-name: Video Blend CI
+name: Video Blend CI (with Drive download)
 
 on:
+  workflow_dispatch:
   push:
     paths:
+      - 'video_blend_headless.py'
       - 'input_videos/**'
       - 'background_videos/**'
-  workflow_dispatch: {}
+
+env:
+  # ✅ رابط Google Drive الثابت للخلفيات
+  DRIVE_FOLDER_URL: "https://drive.google.com/drive/folders/1JYb3bI1PFJIHCPm8Vwm26b6vX7w5gL_C?usp=sharing"
 
 jobs:
   blend:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install apt packages (ffmpeg)
+      - name: Install apt packages
         run: sudo apt-get update && sudo apt-get install -y ffmpeg libgl1
 
-      - name: Set up Python
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
@@ -25,27 +30,27 @@ jobs:
       - name: Install Python deps
         run: pip install --upgrade pip && pip install -r requirements.txt
 
-      - name: Create output folder
-        run: mkdir -p outputs
+      - name: Prepare directories
+        run: |
+          mkdir -p input_videos background_videos outputs
 
-      - name: Run video blender
-        env:
-          INPUT1: input_videos
-          INPUT2: background_videos
-          OUTPUT: outputs
-          BG_PER_EFFECT: 3
-          COMPRESS: "true"
-          CRF: 28
+      - name: Download Google Drive folder into background_videos
+        run: |
+          echo "Downloading Drive folder from: ${DRIVE_FOLDER_URL}"
+          gdown --folder "${DRIVE_FOLDER_URL}" -O background_videos
+
+      - name: Run blender
         run: |
           python3 video_blend_headless.py \
-            --input1_dir "${INPUT1}" \
-            --input2_dir "${INPUT2}" \
-            --output_dir "${OUTPUT}" \
-            --bg_per_effect "${BG_PER_EFFECT}" \
-            --compress "${COMPRESS}" \
-            --crf "${CRF}"
+            --input1_dir input_videos \
+            --input2_dir background_videos \
+            --output_dir outputs \
+            --bg_per_effect 3 \
+            --compress true \
+            --crf 28 \
+            --drive_folder_url "${DRIVE_FOLDER_URL}"
 
-      - name: Upload outputs as artifact
+      - name: Upload outputs
         uses: actions/upload-artifact@v4
         with:
           name: blended-videos

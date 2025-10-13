@@ -2,14 +2,14 @@
 # -*- coding: utf-8 -*-
 
 """
-📽️ Quran Video Maker — Final Integrated Version (v3)
+📽️ Quran Video Maker — v4 (Short Chromas < 60s)
 by Mohamed — Auto-run via GitHub Actions
 
 الوظائف:
-1. يجلب الكرومات (فيديوهات أقل من 180 ثانية) من قناة تلغرام.
-2. يجلب الخلفيات من مجلد Google Drive.
+1. يجلب الكرومات (فيديوهات أقل من 60 ثانية) من قناة تلغرام.
+2. يجلب الخلفيات من Google Drive.
 3. يزيل الخلفية السوداء من الكروما ويضعها فوق الخلفية.
-4. يحفظ الفيديو النهائي ويرفعه إلى مجلد Drive آخر.
+4. يرفع الفيديو النهائي إلى Google Drive.
 5. يسجل كل العمليات في output_logs/history.log.
 """
 
@@ -35,8 +35,8 @@ REFRESH_TOKEN = "1//09SLS4A1oZYsJCgYIARAAGAkSNwF-L9IrQJneNmOVOAjihJWVMGFL2gYlLAd
 TOKEN_URI = "https://oauth2.googleapis.com/token"
 SCOPES = ["https://www.googleapis.com/auth/drive"]
 
-DRIVE_BG_FOLDER_ID = "1JYb3bI1PFJIHCPm8Vwm26b6vX7w5gL_C"     # الخلفيات
-DRIVE_OUTPUT_FOLDER_ID = "1lLKbFPovufWeEkwpCgI3cM-Je-Uee9el"  # الناتج
+DRIVE_BG_FOLDER_ID = "1JYb3bI1PFJIHCPm8Vwm26b6vX7w5gL_C"     # خلفيات
+DRIVE_OUTPUT_FOLDER_ID = "1lLKbFPovufWeEkwpCgI3cM-Je-Uee9el"  # ناتج
 
 # المسارات
 BASE_DIR = Path.cwd()
@@ -54,11 +54,11 @@ VIDEO_CODEC = "libx264"
 AUDIO_CODEC = "aac"
 PRESET = "veryfast"
 CRF = "23"
-MAX_CHROMA_SEC = 180  # تم رفع الحد
-MAX_FILE_SIZE_MB = 10  # أقصى حجم للفيديو من تلغرام
+MAX_CHROMA_SEC = 60   # ⏱️ فقط أقل من 60 ثانية
+MAX_FILE_SIZE_MB = 10 # الحجم الأقصى 10MB
 
 # -----------------------------
-# ⚙️ إدارة الجلسة
+# ⚙️ الجلسة
 # -----------------------------
 def ensure_telegram_session():
     session_file = BASE_DIR / "session.session"
@@ -145,7 +145,7 @@ def upload_file(service, path, folder_id):
     return file['id']
 
 # -----------------------------
-# 🤖 تحميل الكرومات من تلغرام
+# 🤖 تحميل الكرومات من تلغرام (منطقتك الأصلية)
 # -----------------------------
 async def fetch_chromas(api_id, api_hash, channel, session_path):
     client = TelegramClient(session_path, api_id, api_hash)
@@ -154,22 +154,30 @@ async def fetch_chromas(api_id, api_hash, channel, session_path):
     c = conn.cursor()
     new_files = []
 
-    print("📡 Searching for short videos...")
-    async for msg in client.iter_messages(channel, limit=500):
-        video_file, duration, file_size = None, None, 0
+    print("📡 Searching Telegram for short videos (<60s)...")
+    async for msg in client.iter_messages(channel, limit=None):
+        duration = 0
+        file_size = 0
+        file_name = None
+        is_video = False
 
-        if msg.video:
-            video_file = msg.video
-            duration = getattr(msg.video, "duration", 0)
-            file_size = getattr(msg.video, "size", 0)
-        elif msg.document and msg.document.mime_type and msg.document.mime_type.startswith("video/"):
-            video_file = msg.document
-            for attr in video_file.attributes:
-                if isinstance(attr, DocumentAttributeVideo):
-                    duration = getattr(attr, "duration", 0)
+        # 🟢 فيديو عادي
+        if msg.video and isinstance(msg.video.attributes[0], DocumentAttributeVideo):
+            duration = msg.video.attributes[0].duration
             file_size = getattr(msg.file, "size", 0)
+            file_name = msg.file.name if msg.file and msg.file.name else f"{msg.id}.mp4"
+            is_video = True
 
-        if not video_file or not duration:
+        # 🟢 ملف فيديو (Document)
+        elif msg.document and msg.document.mime_type and msg.document.mime_type.startswith("video/"):
+            for attr in msg.document.attributes:
+                if isinstance(attr, DocumentAttributeVideo):
+                    duration = attr.duration
+                    is_video = True
+            file_size = getattr(msg.file, "size", 0)
+            file_name = msg.file.name if msg.file and msg.file.name else f"{msg.id}.mp4"
+
+        if not is_video or not duration:
             continue
         if duration > MAX_CHROMA_SEC:
             continue
@@ -178,9 +186,10 @@ async def fetch_chromas(api_id, api_hash, channel, session_path):
         if c.execute("SELECT 1 FROM processed WHERE msg_id=?", (msg.id,)).fetchone():
             continue
 
-        dest = CHROMAS_DIR / f"{msg.id}.mp4"
-        print(f"⬇️ Downloading chroma {msg.id} ({round(duration)}s)...")
+        dest = CHROMAS_DIR / file_name
+        print(f"⬇️ Downloading {file_name} ({round(duration)}s)...")
         await msg.download_media(file=str(dest))
+
         c.execute("INSERT OR REPLACE INTO processed VALUES (?,?,?)",
                   (msg.id, dest.name, datetime.datetime.utcnow().isoformat()))
         conn.commit()
@@ -190,7 +199,7 @@ async def fetch_chromas(api_id, api_hash, channel, session_path):
     return new_files
 
 # -----------------------------
-# 🎬 الدمج باستخدام ffmpeg
+# 🎬 الدمج عبر ffmpeg
 # -----------------------------
 def get_duration(path):
     cmd = ["ffprobe", "-v", "error", "-show_entries",
@@ -222,7 +231,7 @@ def merge(chroma, background, output):
     os.remove(tmp_bg)
 
 # -----------------------------
-# 🚀 الدالة الرئيسية
+# 🚀 main()
 # -----------------------------
 async def main():
     session_path = ensure_telegram_session()

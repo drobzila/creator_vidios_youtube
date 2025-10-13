@@ -2,209 +2,268 @@
 # -*- coding: utf-8 -*-
 
 """
-Quran Video Maker (updated to accept base64 session)
-- Uses session.session if present.
-- Else tries to decode session.b64 in repo root.
-- Else tries TELEGRAM_SESSION_B64 env var (Base64).
-Security: do NOT commit session.session or session.b64 to a public repo.
+Quran Video Maker — Final Version
+by Mohamed (Auto-run via GitHub Actions)
+
+وظائف السكربت:
+1. يجلب الكرومات (فيديوهات أقل من دقيقة بصوت) من قناة تلغرام.
+2. يجلب الخلفيات من مجلد Google Drive.
+3. يزيل الخلفية السوداء من الكروما ويضعها فوق الخلفية.
+4. يحفظ الفيديو النهائي ويرفعه إلى مجلد Drive آخر.
+5. يسجل كل العمليات في output_logs/history.log.
 """
 
-import os
-import sys
-import sqlite3
-import asyncio
-import random
-import datetime
-import shutil
-import subprocess
-import tempfile
+import os, sys, io, base64, sqlite3, asyncio, random, datetime, subprocess, tempfile
 from pathlib import Path
-import base64
-
-# Telethon for Telegram access
 from telethon import TelegramClient
-
-# Google Drive API
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload, MediaFileUpload
 from google.oauth2.credentials import Credentials
-import io
+from google.auth.transport.requests import Request
 
-# ---------------------------
-# Configuration (user provided)
-# ---------------------------
+# -----------------------------
+# 🔧 الإعدادات العامة
+# -----------------------------
 api_id = 27874350
 api_hash = "a8cca90ec7d1023b8118163822f187c0"
 channel_username = "quranbng"
 
-# OAuth client credentials and refresh token (user provided)
 CLIENT_ID = "553805965519-1gvas0tmcl86v76k7m9bhkmc7m76657s.apps.googleusercontent.com"
 CLIENT_SECRET = "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"
 REFRESH_TOKEN = "1//09SLS4A1oZYsJCgYIARAAGAkSNwF-L9IrQJneNmOVOAjihJWVMGFL2gYlLAdg0Y_0SZg4bQPjbRR-qkDKYvbSS4weE7zrPh8w4_E"
 TOKEN_URI = "https://oauth2.googleapis.com/token"
 SCOPES = ["https://www.googleapis.com/auth/drive"]
 
-# Drive folders (IDs from your links)
-DRIVE_BG_FOLDER_ID = "1JYb3bI1PFJIHCPm8Vwm26b6vX7w5gL_C"
-DRIVE_OUTPUT_FOLDER_ID = "1lLKbFPovufWeEkwpCgI3cM-Je-Uee9el"
+DRIVE_BG_FOLDER_ID = "1JYb3bI1PFJIHCPm8Vwm26b6vX7w5gL_C"     # خلفيات
+DRIVE_OUTPUT_FOLDER_ID = "1lLKbFPovufWeEkwpCgI3cM-Je-Uee9el"  # فيديوهات الناتجة
 
-# Local directories
+# مسارات محلية
 BASE_DIR = Path.cwd()
 CHROMAS_DIR = BASE_DIR / "chromas"
 BACKGROUND_DIR = BASE_DIR / "background_videos"
 OUTPUTS_DIR = BASE_DIR / "outputs"
 LOGS_DIR = BASE_DIR / "output_logs"
 DB_PATH = BASE_DIR / "processed.db"
+for d in (CHROMAS_DIR, BACKGROUND_DIR, OUTPUTS_DIR, LOGS_DIR):
+    d.mkdir(parents=True, exist_ok=True)
 
-# ffmpeg settings
-FFMPEG_BIN = "ffmpeg"
+# إعدادات ffmpeg
+FFMPEG = "ffmpeg"
 VIDEO_CODEC = "libx264"
 AUDIO_CODEC = "aac"
 PRESET = "veryfast"
 CRF = "23"
-
 MAX_CHROMA_SEC = 60
 
-for d in (CHROMAS_DIR, BACKGROUND_DIR, OUTPUTS_DIR, LOGS_DIR):
-    d.mkdir(parents=True, exist_ok=True)
-
-# ---------------------------
-# Session handling helpers
-# ---------------------------
+# -----------------------------
+# ⚙️  إدارة جلسة التلغرام
+# -----------------------------
 def ensure_telegram_session():
     """
-    Ensure a usable 'session.session' file exists for Telethon.
-    Priority:
-      1) session.session file exists -> use it
-      2) session.b64 file exists in repo root -> decode to session.session
-      3) TELEGRAM_SESSION_B64 env var exists -> decode
-    Returns path to session file (string) or None if not found.
+    يبحث عن session.session أو session.b64 أو TELEGRAM_SESSION_B64
+    ويُفك ترميزها تلقائيًا.
     """
-    session_bin = BASE_DIR / "session.session"
-    session_b64_file = BASE_DIR / "session.b64"
+    session_file = BASE_DIR / "session.session"
+    if session_file.exists():
+        print("✅ Using existing session.session file.")
+        return str(session_file)
 
-    if session_bin.exists():
-        print("Using existing session.session file.")
-        return str(session_bin)
-
-    # 2) session.b64 file in repo root
-    if session_b64_file.exists():
-        print("Found session.b64 file in repo root — decoding to session.session")
+    b64_file = BASE_DIR / "session.b64"
+    if b64_file.exists():
+        print("📦 Decoding session.b64 file...")
         try:
-            data = session_b64_file.read_bytes()
-            # may already be base64 text; decode
-            decoded = base64.b64decode(data)
-            session_bin.write_bytes(decoded)
-            # set permissions
-            try:
-                os.chmod(session_bin, 0o600)
-            except:
-                pass
-            return str(session_bin)
+            data = base64.b64decode(b64_file.read_bytes())
+            session_file.write_bytes(data)
+            os.chmod(session_file, 0o600)
+            return str(session_file)
         except Exception as e:
-            print("Failed to decode session.b64:", e)
+            print("❌ Failed to decode session.b64:", e)
 
-    # 3) TELEGRAM_SESSION_B64 env var
     env_b64 = os.environ.get("TELEGRAM_SESSION_B64")
     if env_b64:
-        print("Decoding TELEGRAM_SESSION_B64 env var to session.session")
+        print("📦 Decoding TELEGRAM_SESSION_B64 from env...")
         try:
-            decoded = base64.b64decode(env_b64)
-            session_bin.write_bytes(decoded)
-            try:
-                os.chmod(session_bin, 0o600)
-            except:
-                pass
-            return str(session_bin)
+            data = base64.b64decode(env_b64)
+            session_file.write_bytes(data)
+            os.chmod(session_file, 0o600)
+            return str(session_file)
         except Exception as e:
-            print("Failed to decode TELEGRAM_SESSION_B64:", e)
+            print("❌ Failed to decode TELEGRAM_SESSION_B64:", e)
 
-    print("No session.session / session.b64 / TELEGRAM_SESSION_B64 found. Telethon will try interactive login.")
-    return None
+    print("⚠️ No session found — Telethon will try to log in interactively.")
+    return "session.session"
 
-# ---------------------------
-# Database helpers (unchanged)
-# ---------------------------
+# -----------------------------
+# 🧱 قاعدة البيانات
+# -----------------------------
 def init_db():
     conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS processed_tele (
+    c = conn.cursor()
+    c.execute("""CREATE TABLE IF NOT EXISTS processed(
         msg_id INTEGER PRIMARY KEY,
-        file_name TEXT,
+        filename TEXT,
         processed_at TEXT
-    )""")
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS uploaded_outputs (
-        file_name TEXT PRIMARY KEY,
-        drive_file_id TEXT,
-        uploaded_at TEXT
     )""")
     conn.commit()
     return conn
 
-# (The rest of the functions: get_drive_service, list_files_in_folder, download_file_from_drive,
-#  upload_file_to_drive, fetch_chromas_from_telegram, merge_chroma_over_bg, and main remain
-#  functionally the same as in the previous full script you were given.)
+# -----------------------------
+# ☁️ Google Drive
+# -----------------------------
+def get_drive_service():
+    creds = Credentials(
+        None,
+        refresh_token=REFRESH_TOKEN,
+        token_uri=TOKEN_URI,
+        client_id=CLIENT_ID,
+        client_secret=CLIENT_SECRET,
+        scopes=SCOPES,
+    )
+    creds.refresh(Request())
+    return build('drive', 'v3', credentials=creds, cache_discovery=False)
 
-# For brevity, include them unchanged below (copy-paste the implementations from the previous script),
-# but ensure fetch_chromas_from_telegram uses the session path returned by ensure_telegram_session().
+def list_drive_files(service, folder_id):
+    q = f"'{folder_id}' in parents and trashed=false"
+    results = []
+    page = None
+    while True:
+        res = service.files().list(q=q, spaces='drive', fields='nextPageToken, files(id,name)', pageToken=page).execute()
+        results += res.get('files', [])
+        page = res.get('nextPageToken')
+        if not page:
+            break
+    return results
 
-# ---------------------------
-# Telethon (Telegram) helpers (updated to use session path)
-# ---------------------------
-async def fetch_chromas_from_telegram(api_id, api_hash, channel_username, limit=50, session_path=None):
-    """
-    Downloads video messages from the channel that: video and duration <= MAX_CHROMA_SEC
-    Saves to chromas/ directory as <msg_id>.mp4
-    If session_path is provided, use it as the Telethon session filename.
-    """
-    session_name = session_path if session_path else "session_telegram"
-    client = TelegramClient(str(session_name), api_id, api_hash)
+def download_file(service, file_id, dest):
+    req = service.files().get_media(fileId=file_id)
+    fh = io.FileIO(dest, 'wb')
+    downloader = MediaIoBaseDownload(fh, req)
+    done = False
+    while not done:
+        _, done = downloader.next_chunk()
+    fh.close()
+
+def upload_file(service, path, folder_id):
+    meta = {'name': path.name, 'parents': [folder_id]}
+    media = MediaFileUpload(str(path), resumable=True)
+    f = service.files().create(body=meta, media_body=media, fields='id').execute()
+    return f['id']
+
+# -----------------------------
+# 🤖 تلغرام: تحميل الكرومات
+# -----------------------------
+async def fetch_chromas(api_id, api_hash, channel, session_path):
+    client = TelegramClient(session_path, api_id, api_hash)
     await client.start()
-    downloaded = []
-    try:
-        async for msg in client.iter_messages(channel_username, limit=limit):
-            if not msg:
-                continue
-            if msg.video and msg.video.duration and msg.video.duration <= MAX_CHROMA_SEC:
-                msg_id = msg.id
-                conn = sqlite3.connect(DB_PATH)
-                cur = conn.cursor()
-                cur.execute("SELECT 1 FROM processed_tele WHERE msg_id=?", (msg_id,))
-                if cur.fetchone():
-                    conn.close()
-                    continue
-                conn.close()
+    conn = init_db()
+    c = conn.cursor()
+    new_files = []
 
-                filename = CHROMAS_DIR / f"{msg_id}.mp4"
-                if filename.exists():
-                    downloaded.append(filename)
-                    continue
-                print(f"Downloading Telegram message {msg_id} (duration {msg.video.duration}s)...")
-                await msg.download_media(file=str(filename))
-                downloaded.append(filename)
-    finally:
-        await client.disconnect()
-    return downloaded
+    async for msg in client.iter_messages(channel, limit=100):
+        if not msg.video or msg.video.duration > MAX_CHROMA_SEC:
+            continue
+        if c.execute("SELECT 1 FROM processed WHERE msg_id=?", (msg.id,)).fetchone():
+            continue
+        dest = CHROMAS_DIR / f"{msg.id}.mp4"
+        print(f"⬇️ Downloading chroma {msg.id} ({msg.video.duration}s)...")
+        await msg.download_media(file=str(dest))
+        c.execute("INSERT OR REPLACE INTO processed VALUES (?,?,?)",
+                  (msg.id, dest.name, datetime.datetime.utcnow().isoformat()))
+        new_files.append(dest)
+        conn.commit()
 
-# ---------------------------
-# (Place here the rest of helper functions and main flow identical to earlier script)
-# For brevity in this message I keep them as-is; when you paste into your repo,
-# ensure you include get_drive_service, list_files_in_folder, download/upload, merge_chroma_over_bg, main, etc.
-# ---------------------------
+    await client.disconnect()
+    return new_files
 
-# Example main runner (short form) - integrate full logic from previous script:
+# -----------------------------
+# 🎬 الدمج عبر ffmpeg
+# -----------------------------
+def get_duration(path):
+    cmd = [FFMPEG.replace('ffmpeg', 'ffprobe'), "-v", "error", "-show_entries",
+           "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", str(path)]
+    out = subprocess.run(cmd, capture_output=True, text=True)
+    return float(out.stdout.strip())
+
+def merge(chroma, background, output):
+    dur = get_duration(chroma)
+    print(f"🎞 Merging {chroma.name} with {background.name}...")
+    tmp_bg = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False).name
+    subprocess.run([FFMPEG, "-y", "-i", str(background), "-t", str(dur),
+                    "-c", "copy", tmp_bg], check=True)
+
+    cmd = [
+        FFMPEG, "-y",
+        "-i", tmp_bg, "-i", str(chroma),
+        "-filter_complex", "[1:v]colorkey=0x000000:0.3:0.2[ck];[0:v][ck]overlay[outv]",
+        "-map", "[outv]", "-map", "1:a?",
+        "-c:v", VIDEO_CODEC, "-preset", PRESET, "-crf", CRF,
+        "-c:a", AUDIO_CODEC, "-b:a", "128k",
+        str(output)
+    ]
+    subprocess.run(cmd, check=True)
+    os.remove(tmp_bg)
+
+# -----------------------------
+# 🚀 الدالة الرئيسية
+# -----------------------------
 async def main():
     session_path = ensure_telegram_session()
-    # proceed with rest of logic, passing session_path to fetch_chromas_from_telegram(...)
-    # (copy the rest of the main flow from the previous full script)
-    print("Session prepared at:", session_path)
-    # ... (download backgrounds, merge, upload, db updates)
+    print("Session ready:", session_path)
 
+    conn = init_db()
+    drive = get_drive_service()
+
+    print("📥 Fetching chromas from Telegram...")
+    chromas = await fetch_chromas(api_id, api_hash, channel_username, session_path)
+    if not chromas:
+        print("No new chromas found.")
+        (LOGS_DIR / "history.log").touch(exist_ok=True)
+        return
+
+    print("☁️ Fetching backgrounds from Google Drive...")
+    bg_files = list_drive_files(drive, DRIVE_BG_FOLDER_ID)
+    if not bg_files:
+        print("No backgrounds found.")
+        return
+
+    # Download backgrounds if missing
+    for bg in bg_files:
+        dest = BACKGROUND_DIR / bg["name"]
+        if not dest.exists():
+            print(f"⬇️ Downloading background {bg['name']}...")
+            download_file(drive, bg["id"], str(dest))
+
+    bg_list = list(BACKGROUND_DIR.glob("*"))
+    if not bg_list:
+        print("No local backgrounds available.")
+        return
+
+    # Process chromas
+    for chroma in chromas:
+        bg = random.choice(bg_list)
+        out_name = f"final_{chroma.stem}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
+        out_path = OUTPUTS_DIR / out_name
+
+        try:
+            merge(chroma, bg, out_path)
+            print(f"✅ Created {out_name}")
+            drive_id = upload_file(drive, out_path, DRIVE_OUTPUT_FOLDER_ID)
+            print(f"☁️ Uploaded to Drive (ID: {drive_id})")
+
+            with open(LOGS_DIR / "history.log", "a", encoding="utf-8") as f:
+                f.write(f"{datetime.datetime.utcnow().isoformat()} | {chroma.name} -> {out_name} | {drive_id}\n")
+
+        except Exception as e:
+            print("❌ Merge or upload failed:", e)
+
+    conn.close()
+    (LOGS_DIR / "history.log").touch(exist_ok=True)
+    print("🏁 Done.")
+
+# -----------------------------
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except Exception as e:
-        print("Script failed:", e)
+        print("❌ Script failed:", e)
         sys.exit(1)

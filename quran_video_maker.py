@@ -2,20 +2,21 @@
 # -*- coding: utf-8 -*-
 
 """
-Quran Video Maker — Final Version (fixed)
-by Mohamed (Auto-run via GitHub Actions)
+📽️ Quran Video Maker — Final Integrated Version (v3)
+by Mohamed — Auto-run via GitHub Actions
 
-وظائف السكربت:
-1. يجلب الكرومات (فيديوهات أقل من دقيقة بصوت) من قناة تلغرام.
+الوظائف:
+1. يجلب الكرومات (فيديوهات أقل من 180 ثانية) من قناة تلغرام.
 2. يجلب الخلفيات من مجلد Google Drive.
 3. يزيل الخلفية السوداء من الكروما ويضعها فوق الخلفية.
 4. يحفظ الفيديو النهائي ويرفعه إلى مجلد Drive آخر.
 5. يسجل كل العمليات في output_logs/history.log.
 """
 
-import os, sys, io, base64, sqlite3, asyncio, random, datetime, subprocess, tempfile
+import os, io, sys, base64, sqlite3, asyncio, random, datetime, tempfile, subprocess
 from pathlib import Path
 from telethon import TelegramClient
+from telethon.tl.types import DocumentAttributeVideo
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload, MediaFileUpload
 from google.oauth2.credentials import Credentials
@@ -34,10 +35,10 @@ REFRESH_TOKEN = "1//09SLS4A1oZYsJCgYIARAAGAkSNwF-L9IrQJneNmOVOAjihJWVMGFL2gYlLAd
 TOKEN_URI = "https://oauth2.googleapis.com/token"
 SCOPES = ["https://www.googleapis.com/auth/drive"]
 
-DRIVE_BG_FOLDER_ID = "1JYb3bI1PFJIHCPm8Vwm26b6vX7w5gL_C"     # خلفيات
-DRIVE_OUTPUT_FOLDER_ID = "1lLKbFPovufWeEkwpCgI3cM-Je-Uee9el"  # فيديوهات الناتجة
+DRIVE_BG_FOLDER_ID = "1JYb3bI1PFJIHCPm8Vwm26b6vX7w5gL_C"     # الخلفيات
+DRIVE_OUTPUT_FOLDER_ID = "1lLKbFPovufWeEkwpCgI3cM-Je-Uee9el"  # الناتج
 
-# مسارات محلية
+# المسارات
 BASE_DIR = Path.cwd()
 CHROMAS_DIR = BASE_DIR / "chromas"
 BACKGROUND_DIR = BASE_DIR / "background_videos"
@@ -53,10 +54,11 @@ VIDEO_CODEC = "libx264"
 AUDIO_CODEC = "aac"
 PRESET = "veryfast"
 CRF = "23"
-MAX_CHROMA_SEC = 60
+MAX_CHROMA_SEC = 180  # تم رفع الحد
+MAX_FILE_SIZE_MB = 10  # أقصى حجم للفيديو من تلغرام
 
 # -----------------------------
-# ⚙️  إدارة جلسة التلغرام
+# ⚙️ إدارة الجلسة
 # -----------------------------
 def ensure_telegram_session():
     session_file = BASE_DIR / "session.session"
@@ -67,24 +69,18 @@ def ensure_telegram_session():
     b64_file = BASE_DIR / "session.b64"
     if b64_file.exists():
         print("📦 Decoding session.b64 file...")
-        try:
-            data = base64.b64decode(b64_file.read_bytes())
-            session_file.write_bytes(data)
-            os.chmod(session_file, 0o600)
-            return str(session_file)
-        except Exception as e:
-            print("❌ Failed to decode session.b64:", e)
+        data = base64.b64decode(b64_file.read_bytes())
+        session_file.write_bytes(data)
+        os.chmod(session_file, 0o600)
+        return str(session_file)
 
     env_b64 = os.environ.get("TELEGRAM_SESSION_B64")
     if env_b64:
         print("📦 Decoding TELEGRAM_SESSION_B64 from env...")
-        try:
-            data = base64.b64decode(env_b64)
-            session_file.write_bytes(data)
-            os.chmod(session_file, 0o600)
-            return str(session_file)
-        except Exception as e:
-            print("❌ Failed to decode TELEGRAM_SESSION_B64:", e)
+        data = base64.b64decode(env_b64)
+        session_file.write_bytes(data)
+        os.chmod(session_file, 0o600)
+        return str(session_file)
 
     print("⚠️ No session found — Telethon will try to log in interactively.")
     return "session.session"
@@ -120,16 +116,18 @@ def get_drive_service():
 
 def list_drive_files(service, folder_id):
     q = f"'{folder_id}' in parents and trashed=false"
-    results = []
-    page = None
+    files, token = [], None
     while True:
-        res = service.files().list(q=q, spaces='drive',
-                                   fields='nextPageToken, files(id,name)', pageToken=page).execute()
-        results += res.get('files', [])
-        page = res.get('nextPageToken')
-        if not page:
+        res = service.files().list(
+            q=q, spaces='drive',
+            fields='nextPageToken, files(id,name)',
+            pageToken=token
+        ).execute()
+        files += res.get('files', [])
+        token = res.get('nextPageToken')
+        if not token:
             break
-    return results
+    return files
 
 def download_file(service, file_id, dest):
     req = service.files().get_media(fileId=file_id)
@@ -143,11 +141,11 @@ def download_file(service, file_id, dest):
 def upload_file(service, path, folder_id):
     meta = {'name': path.name, 'parents': [folder_id]}
     media = MediaFileUpload(str(path), resumable=True)
-    f = service.files().create(body=meta, media_body=media, fields='id').execute()
-    return f['id']
+    file = service.files().create(body=meta, media_body=media, fields='id').execute()
+    return file['id']
 
 # -----------------------------
-# 🤖 تلغرام: تحميل الكرومات
+# 🤖 تحميل الكرومات من تلغرام
 # -----------------------------
 async def fetch_chromas(api_id, api_hash, channel, session_path):
     client = TelegramClient(session_path, api_id, api_hash)
@@ -156,23 +154,26 @@ async def fetch_chromas(api_id, api_hash, channel, session_path):
     c = conn.cursor()
     new_files = []
 
-    async for msg in client.iter_messages(channel, limit=100):
-        video_file = None
-        duration = None
+    print("📡 Searching for short videos...")
+    async for msg in client.iter_messages(channel, limit=500):
+        video_file, duration, file_size = None, None, 0
 
         if msg.video:
             video_file = msg.video
-            duration = getattr(msg.video, "duration", None)
+            duration = getattr(msg.video, "duration", 0)
+            file_size = getattr(msg.video, "size", 0)
         elif msg.document and msg.document.mime_type and msg.document.mime_type.startswith("video/"):
             video_file = msg.document
             for attr in video_file.attributes:
-                if hasattr(attr, "duration"):
-                    duration = attr.duration
-                    break
+                if isinstance(attr, DocumentAttributeVideo):
+                    duration = getattr(attr, "duration", 0)
+            file_size = getattr(msg.file, "size", 0)
 
         if not video_file or not duration:
             continue
         if duration > MAX_CHROMA_SEC:
+            continue
+        if file_size > MAX_FILE_SIZE_MB * 1024 * 1024:
             continue
         if c.execute("SELECT 1 FROM processed WHERE msg_id=?", (msg.id,)).fetchone():
             continue
@@ -189,15 +190,11 @@ async def fetch_chromas(api_id, api_hash, channel, session_path):
     return new_files
 
 # -----------------------------
-# 🎬 الدمج عبر ffmpeg
+# 🎬 الدمج باستخدام ffmpeg
 # -----------------------------
 def get_duration(path):
-    cmd = [
-        "ffprobe", "-v", "error",
-        "-show_entries", "format=duration",
-        "-of", "default=noprint_wrappers=1:nokey=1",
-        str(path)
-    ]
+    cmd = ["ffprobe", "-v", "error", "-show_entries",
+           "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", str(path)]
     out = subprocess.run(cmd, capture_output=True, text=True)
     try:
         return float(out.stdout.strip())
@@ -237,17 +234,16 @@ async def main():
     print("📥 Fetching chromas from Telegram...")
     chromas = await fetch_chromas(api_id, api_hash, channel_username, session_path)
     if not chromas:
-        print("No new chromas found.")
+        print("⚠️ No new chromas found.")
         (LOGS_DIR / "history.log").touch(exist_ok=True)
         return
 
     print("☁️ Fetching backgrounds from Google Drive...")
     bg_files = list_drive_files(drive, DRIVE_BG_FOLDER_ID)
     if not bg_files:
-        print("No backgrounds found.")
+        print("❌ No backgrounds found.")
         return
 
-    # Download backgrounds if missing
     for bg in bg_files:
         dest = BACKGROUND_DIR / bg["name"]
         if not dest.exists():
@@ -256,10 +252,9 @@ async def main():
 
     bg_list = list(BACKGROUND_DIR.glob("*"))
     if not bg_list:
-        print("No local backgrounds available.")
+        print("❌ No local backgrounds available.")
         return
 
-    # Process chromas
     for chroma in chromas:
         bg = random.choice(bg_list)
         out_name = f"final_{chroma.stem}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
@@ -268,12 +263,10 @@ async def main():
         try:
             merge(chroma, bg, out_path)
             print(f"✅ Created {out_name}")
-            drive_id = upload_file(drive, out_path, DRIVE_OUTPUT_FOLDER_ID)
-            print(f"☁️ Uploaded to Drive (ID: {drive_id})")
-
+            file_id = upload_file(drive, out_path, DRIVE_OUTPUT_FOLDER_ID)
+            print(f"☁️ Uploaded to Drive (ID: {file_id})")
             with open(LOGS_DIR / "history.log", "a", encoding="utf-8") as f:
-                f.write(f"{datetime.datetime.utcnow().isoformat()} | {chroma.name} -> {out_name} | {drive_id}\n")
-
+                f.write(f"{datetime.datetime.utcnow().isoformat()} | {chroma.name} -> {out_name} | {file_id}\n")
         except Exception as e:
             print("❌ Merge or upload failed:", e)
 

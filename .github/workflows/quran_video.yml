@@ -2,7 +2,7 @@ name: Quran Video Generator (scheduled)
 
 on:
   schedule:
-    - cron: '0 6 * * *'  # يوميا 06:00 UTC
+    - cron: '0 6 * * *'  # كل يوم 06:00 UTC
   workflow_dispatch:
 
 jobs:
@@ -17,41 +17,33 @@ jobs:
         with:
           python-version: "3.10"
 
-      - name: Install system dependencies
+      - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg
-
-      - name: Install Python packages
-        run: |
           python -m pip install --upgrade pip
           pip install telethon google-api-python-client google-auth-httplib2 google-auth-oauthlib
 
-      - name: Prepare Telegram session (from secret or file)
+      - name: Prepare Telegram session
         env:
-          TELEGRAM_SESSION_B64: ${{ secrets.TELEGRAM_SESSION_B64 }}  # optional secret
+          TELEGRAM_SESSION_B64: ${{ secrets.TELEGRAM_SESSION_B64 }}
         run: |
-          # If TELEGRAM_SESSION_B64 secret exists, decode it to session.session
           if [ -n "${TELEGRAM_SESSION_B64}" ]; then
-            echo "Decoding TELEGRAM_SESSION_B64 secret..."
             echo "${TELEGRAM_SESSION_B64}" | base64 --decode > session.session
-            chmod 600 session.session || true
+            chmod 600 session.session
           fi
-
-          # If session.b64 is committed in repo (not recommended publicly), decode it if session.session missing
           if [ ! -f session.session ] && [ -f session.b64 ]; then
-            echo "Decoding session.b64 file in repo..."
-            base64 --decode session.b64 > session.session || true
-            chmod 600 session.session || true
+            base64 --decode session.b64 > session.session
+            chmod 600 session.session
           fi
 
-          ls -l session.session || echo "No session.session created (will try interactive login)"
-
-      - name: Run quran video maker
+      - name: Run Quran Video Maker
         run: python quran_video_maker.py
 
       - name: Upload logs artifact
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: quran-generator-logs
           path: output_logs/
+          if-no-files-found: ignore

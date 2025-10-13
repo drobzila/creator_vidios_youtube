@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 """
-Quran Video Maker — Final Version
+Quran Video Maker — Final Version (fixed)
 by Mohamed (Auto-run via GitHub Actions)
 
 وظائف السكربت:
@@ -59,10 +59,6 @@ MAX_CHROMA_SEC = 60
 # ⚙️  إدارة جلسة التلغرام
 # -----------------------------
 def ensure_telegram_session():
-    """
-    يبحث عن session.session أو session.b64 أو TELEGRAM_SESSION_B64
-    ويُفك ترميزها تلقائيًا.
-    """
     session_file = BASE_DIR / "session.session"
     if session_file.exists():
         print("✅ Using existing session.session file.")
@@ -127,7 +123,8 @@ def list_drive_files(service, folder_id):
     results = []
     page = None
     while True:
-        res = service.files().list(q=q, spaces='drive', fields='nextPageToken, files(id,name)', pageToken=page).execute()
+        res = service.files().list(q=q, spaces='drive',
+                                   fields='nextPageToken, files(id,name)', pageToken=page).execute()
         results += res.get('files', [])
         page = res.get('nextPageToken')
         if not page:
@@ -160,17 +157,33 @@ async def fetch_chromas(api_id, api_hash, channel, session_path):
     new_files = []
 
     async for msg in client.iter_messages(channel, limit=100):
-        if not msg.video or msg.video.duration > MAX_CHROMA_SEC:
+        video_file = None
+        duration = None
+
+        if msg.video:
+            video_file = msg.video
+            duration = getattr(msg.video, "duration", None)
+        elif msg.document and msg.document.mime_type and msg.document.mime_type.startswith("video/"):
+            video_file = msg.document
+            for attr in video_file.attributes:
+                if hasattr(attr, "duration"):
+                    duration = attr.duration
+                    break
+
+        if not video_file or not duration:
+            continue
+        if duration > MAX_CHROMA_SEC:
             continue
         if c.execute("SELECT 1 FROM processed WHERE msg_id=?", (msg.id,)).fetchone():
             continue
+
         dest = CHROMAS_DIR / f"{msg.id}.mp4"
-        print(f"⬇️ Downloading chroma {msg.id} ({msg.video.duration}s)...")
+        print(f"⬇️ Downloading chroma {msg.id} ({round(duration)}s)...")
         await msg.download_media(file=str(dest))
         c.execute("INSERT OR REPLACE INTO processed VALUES (?,?,?)",
                   (msg.id, dest.name, datetime.datetime.utcnow().isoformat()))
-        new_files.append(dest)
         conn.commit()
+        new_files.append(dest)
 
     await client.disconnect()
     return new_files
@@ -179,14 +192,22 @@ async def fetch_chromas(api_id, api_hash, channel, session_path):
 # 🎬 الدمج عبر ffmpeg
 # -----------------------------
 def get_duration(path):
-    cmd = [FFMPEG.replace('ffmpeg', 'ffprobe'), "-v", "error", "-show_entries",
-           "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", str(path)]
+    cmd = [
+        "ffprobe", "-v", "error",
+        "-show_entries", "format=duration",
+        "-of", "default=noprint_wrappers=1:nokey=1",
+        str(path)
+    ]
     out = subprocess.run(cmd, capture_output=True, text=True)
-    return float(out.stdout.strip())
+    try:
+        return float(out.stdout.strip())
+    except:
+        return 0.0
 
 def merge(chroma, background, output):
     dur = get_duration(chroma)
-    print(f"🎞 Merging {chroma.name} with {background.name}...")
+    print(f"🎞 Merging {chroma.name} with {background.name} ({dur:.1f}s)...")
+
     tmp_bg = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False).name
     subprocess.run([FFMPEG, "-y", "-i", str(background), "-t", str(dur),
                     "-c", "copy", tmp_bg], check=True)

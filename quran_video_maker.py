@@ -145,7 +145,7 @@ def upload_file(service, path, folder_id):
     return file['id']
 
 # -----------------------------
-# 🤖 تحميل الكرومات من تلغرام (منطقتك الأصلية)
+# 🤖 تلغرام: تحميل الكرومات (5 يوميًا)
 # -----------------------------
 async def fetch_chromas(api_id, api_hash, channel, session_path):
     client = TelegramClient(session_path, api_id, api_hash)
@@ -154,46 +154,67 @@ async def fetch_chromas(api_id, api_hash, channel, session_path):
     c = conn.cursor()
     new_files = []
 
-    print("📡 Searching Telegram for short videos (<60s)...")
+    MAX_CHROMA_SEC = 60       # أقصى مدة 60 ثانية
+    DAILY_LIMIT = 5            # 🟢 عدد الكرومات اليومية
+    DELAY_BETWEEN = 5          # ⏱️ تأخير 5 ثوانٍ بين كل تحميل
+
+    print(f"📡 Searching for up to {DAILY_LIMIT} new chromas (≤ {MAX_CHROMA_SEC}s)...")
+
     async for msg in client.iter_messages(channel, limit=None):
-        duration = 0
-        file_size = 0
-        file_name = None
-        is_video = False
+        video_file = None
+        duration = None
 
-        # 🟢 فيديو عادي
-        if msg.video and isinstance(msg.video.attributes[0], DocumentAttributeVideo):
-            duration = msg.video.attributes[0].duration
-            file_size = getattr(msg.file, "size", 0)
-            file_name = msg.file.name if msg.file and msg.file.name else f"{msg.id}.mp4"
-            is_video = True
+        # 🟢 الحالة 1: رسالة من نوع فيديو
+        if msg.video:
+            video_file = msg.video
+            duration = getattr(msg.video, "duration", None)
 
-        # 🟢 ملف فيديو (Document)
+        # 🟢 الحالة 2: رسالة من نوع Document ولكنها فيديو
         elif msg.document and msg.document.mime_type and msg.document.mime_type.startswith("video/"):
-            for attr in msg.document.attributes:
-                if isinstance(attr, DocumentAttributeVideo):
-                    duration = attr.duration
-                    is_video = True
-            file_size = getattr(msg.file, "size", 0)
-            file_name = msg.file.name if msg.file and msg.file.name else f"{msg.id}.mp4"
+            video_file = msg.document
+            # نحاول استخراج المدة من الخصائص إن وُجدت
+            for attr in getattr(video_file, "attributes", []):
+                duration = getattr(attr, "duration", None)
+                if duration:
+                    break
 
-        if not is_video or not duration:
+        # ⛔ إذا لا يوجد فيديو أو المدة غير معروفة، تجاهله
+        if not video_file or not duration:
             continue
+
+        # ⛔ نتخطى الفيديوهات الطويلة
         if duration > MAX_CHROMA_SEC:
             continue
-        if file_size > MAX_FILE_SIZE_MB * 1024 * 1024:
-            continue
+
+        # ⛔ نتأكد إن لم تتم معالجته مسبقاً
         if c.execute("SELECT 1 FROM processed WHERE msg_id=?", (msg.id,)).fetchone():
             continue
 
-        dest = CHROMAS_DIR / file_name
-        print(f"⬇️ Downloading {file_name} ({round(duration)}s)...")
-        await msg.download_media(file=str(dest))
+        dest = CHROMAS_DIR / f"{msg.id}.mp4"
+        print(f"\n⬇️ Downloading chroma {msg.id} ({round(duration)}s)...")
 
+        # 🛡️ نحاول التحميل مع إعادة المحاولة
+        for attempt in range(3):
+            try:
+                await msg.download_media(file=str(dest))
+                break
+            except Exception as e:
+                print(f"⚠️ Retry {attempt+1}/3 due to {e}")
+                await asyncio.sleep(10)
+
+        # ✅ نسجّل في قاعدة البيانات
         c.execute("INSERT OR REPLACE INTO processed VALUES (?,?,?)",
                   (msg.id, dest.name, datetime.datetime.utcnow().isoformat()))
         conn.commit()
         new_files.append(dest)
+
+        # 🕒 تأخير بسيط لتجنب حظر التلغرام
+        await asyncio.sleep(DELAY_BETWEEN)
+
+        # 🚫 نوقف بعد 5 فيديوهات
+        if len(new_files) >= DAILY_LIMIT:
+            print("⏹️ Daily limit (5 chromas) reached.")
+            break
 
     await client.disconnect()
     return new_files

@@ -208,28 +208,60 @@ async def fetch_chromas(api_id, api_hash, channel, session_path):
 # -----------------------------
 # 🎬 دمج الكروما مع الخلفية
 # -----------------------------
-def merge(chroma, bg, output):
-    dur = get_duration(chroma)
+def merge(chroma, bg_dir, output):
+    chroma_dur = get_duration(chroma)
 
-    # توحيد المقاسات إلى 1080x1920 (9:16)
+    # اختيار خلفيات متعددة لتغطية طول الكروما
+    bg_files = list(Path(bg_dir).glob("*.mp4"))
+    random.shuffle(bg_files)
+
+    total_dur = 0
+    bg_concat_list = []
+    temp_files = []
+
+    # دمج خلفيات حتى تغطي طول الكروما
+    for bg in bg_files:
+        bg_dur = get_duration(bg)
+        part = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False).name
+        subprocess.run([
+            "ffmpeg", "-y", "-i", str(bg),
+            "-t", str(min(bg_dur, chroma_dur - total_dur)),
+            "-c", "copy", part
+        ], check=True)
+        bg_concat_list.append(part)
+        total_dur += bg_dur
+        if total_dur >= chroma_dur:
+            break
+
+    # إنشاء ملف نصي لتجميع الخلفيات المتعددة
+    concat_file = tempfile.NamedTemporaryFile(mode="w", delete=False)
+    for f in bg_concat_list:
+        concat_file.write(f"file '{f}'\n")
+    concat_file.close()
+
+    bg_combined = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False).name
+    subprocess.run([
+        "ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", concat_file.name,
+        "-c", "copy", bg_combined
+    ], check=True)
+
+    # ضبط المقاسات وتطبيق الكروما كما في النسخة السابقة
     chroma_resized = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False).name
-    bg_resized = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False).name
-
-    # تغيير مقاس الكروما مع الحفاظ على النسبة
     subprocess.run([
         "ffmpeg", "-y", "-i", str(chroma),
         "-vf", "scale=-1:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black",
         "-c:a", "copy", chroma_resized
     ], check=True)
 
-    # تغيير مقاس الخلفية بنفس الطريقة وتقطيعها بطول الكروما
+    bg_resized = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False).name
     subprocess.run([
-        "ffmpeg", "-y", "-i", str(bg), "-t", str(dur),
+        "ffmpeg", "-y", "-i", bg_combined,
+        "-t", str(chroma_dur),
         "-vf", "scale=-1:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black",
         "-c:a", "copy", bg_resized
     ], check=True)
 
-    # دمج الكروما والخلفية
+    # دمج النتيجة النهائية
     cmd = [
         "ffmpeg", "-y",
         "-i", bg_resized, "-i", chroma_resized,
@@ -240,9 +272,9 @@ def merge(chroma, bg, output):
     ]
     subprocess.run(cmd, check=True)
 
-    # تنظيف الملفات المؤقتة
-    os.remove(chroma_resized)
-    os.remove(bg_resized)
+    # حذف الملفات المؤقتة
+    for f in bg_concat_list + [chroma_resized, bg_resized, bg_combined, concat_file.name]:
+        os.remove(f)
 
 # -----------------------------
 # 🚀 Main

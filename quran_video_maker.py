@@ -208,32 +208,31 @@ async def fetch_chromas(api_id, api_hash, channel, session_path):
 # -----------------------------
 # 🎬 دمج الكروما مع الخلفية
 # -----------------------------
-def merge(chroma, backgrounds, output):
-    chroma_dur = get_duration(chroma)
+def merge(chroma, bg, output):
+    dur = get_duration(chroma)
 
-    combined = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False).name
-    total_bg = 0.0
-    bg_parts = []
+    # توحيد المقاسات إلى 1080x1920 (9:16)
+    chroma_resized = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False).name
+    bg_resized = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False).name
 
-    while total_bg < chroma_dur:
-        bg = random.choice(backgrounds)
-        dur = get_duration(bg)
-        total_bg += dur
-        bg_parts.append(f"file '{bg}'")
+    # تغيير مقاس الكروما مع الحفاظ على النسبة
+    subprocess.run([
+        "ffmpeg", "-y", "-i", str(chroma),
+        "-vf", "scale=-1:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black",
+        "-c:a", "copy", chroma_resized
+    ], check=True)
 
-    list_path = tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False)
-    list_path.write("\n".join(bg_parts))
-    list_path.close()
+    # تغيير مقاس الخلفية بنفس الطريقة وتقطيعها بطول الكروما
+    subprocess.run([
+        "ffmpeg", "-y", "-i", str(bg), "-t", str(dur),
+        "-vf", "scale=-1:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black",
+        "-c:a", "copy", bg_resized
+    ], check=True)
 
-    subprocess.run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", list_path.name,
-                    "-c", "copy", combined], check=True)
-
-    tmp_bg = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False).name
-    subprocess.run(["ffmpeg", "-y", "-i", combined, "-t", str(chroma_dur), "-c", "copy", tmp_bg], check=True)
-
+    # دمج الكروما والخلفية
     cmd = [
         "ffmpeg", "-y",
-        "-i", tmp_bg, "-i", str(chroma),
+        "-i", bg_resized, "-i", chroma_resized,
         "-filter_complex", "[1:v]colorkey=0x000000:0.3:0.2[ck];[0:v][ck]overlay[outv]",
         "-map", "[outv]", "-map", "1:a?",
         "-c:v", "libx264", "-preset", "fast", "-crf", "23",
@@ -241,9 +240,9 @@ def merge(chroma, backgrounds, output):
     ]
     subprocess.run(cmd, check=True)
 
-    os.remove(tmp_bg)
-    os.remove(combined)
-    os.remove(list_path.name)
+    # تنظيف الملفات المؤقتة
+    os.remove(chroma_resized)
+    os.remove(bg_resized)
 
 # -----------------------------
 # 🚀 Main

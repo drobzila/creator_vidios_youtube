@@ -279,6 +279,9 @@ def merge(chroma, bg_dir, output):
 # -----------------------------
 # 🚀 Main
 # -----------------------------
+# -----------------------------
+# 🚀 Main
+# -----------------------------
 async def main():
     session_path = ensure_telegram_session()
     conn = init_db()
@@ -297,13 +300,13 @@ async def main():
         if not dest.exists():
             download_file(drive, bg["id"], str(dest))
 
-    bg_list = list(BACKGROUND_DIR.glob("*.mp4"))
     log_file = LOGS_DIR / f"uploaded_{datetime.datetime.now().strftime('%Y-%m-%d')}.txt"
 
     for chroma in chromas:
         out_path = OUTPUTS_DIR / f"final_{chroma.stem}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
         try:
-            merge(chroma, bg_list, out_path)
+            # التعديل هنا: تمرير المجلد BACKGROUND_DIR بدل القائمة bg_list
+            merge(chroma, BACKGROUND_DIR, out_path)
             print(f"✅ Created {out_path.name}")
             file_id = upload_file(drive, out_path, DRIVE_OUTPUT_FOLDER_ID)
             print(f"☁️ Uploaded: {file_id}")
@@ -321,7 +324,7 @@ async def main():
     conn.close()
     print(f"📝 Log saved to: {log_file}")
     print("🏁 Done!")
-
+    
 if __name__ == "__main__":
     try:
         asyncio.run(main())

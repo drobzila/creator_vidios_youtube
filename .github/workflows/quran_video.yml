@@ -16,6 +16,14 @@ jobs:
       - name: 🧾 Checkout repository
         uses: actions/checkout@v4
 
+      # 🔄 استرجاع قاعدة البيانات processed.db من آخر تشغيل
+      - name: 🔄 Restore processed.db
+        uses: actions/download-artifact@v4
+        with:
+          name: processed-db
+          path: .
+        continue-on-error: true  # يتجاهل الخطأ لو لم تكن موجودة أول مرة
+
       - name: 🐍 Setup Python 3.10
         uses: actions/setup-python@v4
         with:
@@ -42,3 +50,10 @@ jobs:
         run: |
           echo "🚀 Starting Quran Video Generator..."
           python quran_video_maker.py
+
+      # 💾 حفظ قاعدة البيانات بعد انتهاء السكربت
+      - name: 📦 Save processed database
+        uses: actions/upload-artifact@v4
+        with:
+          name: processed-db
+          path: processed.db

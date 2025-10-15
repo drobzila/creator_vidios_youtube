@@ -217,7 +217,6 @@ def merge(chroma, bg_dir, output):
 
     total_dur = 0
     bg_concat_list = []
-    temp_files = []
 
     # دمج خلفيات حتى تغطي طول الكروما
     for bg in bg_files:
@@ -226,7 +225,8 @@ def merge(chroma, bg_dir, output):
         subprocess.run([
             "ffmpeg", "-y", "-i", str(bg),
             "-t", str(min(bg_dur, chroma_dur - total_dur)),
-            "-c", "copy", part
+            "-c:v", "libx264", "-c:a", "aac", "-b:a", "128k",
+            part
         ], check=True)
         bg_concat_list.append(part)
         total_dur += bg_dur
@@ -242,15 +242,17 @@ def merge(chroma, bg_dir, output):
     bg_combined = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False).name
     subprocess.run([
         "ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", concat_file.name,
-        "-c", "copy", bg_combined
+        "-c:v", "libx264", "-c:a", "aac", "-b:a", "128k",
+        bg_combined
     ], check=True)
 
-    # ضبط المقاسات وتطبيق الكروما كما في النسخة السابقة
+    # ضبط المقاسات وتطبيق الكروما
     chroma_resized = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False).name
     subprocess.run([
         "ffmpeg", "-y", "-i", str(chroma),
         "-vf", "scale=-1:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black",
-        "-c:a", "copy", chroma_resized
+        "-c:v", "libx264", "-c:a", "aac", "-b:a", "128k",
+        chroma_resized
     ], check=True)
 
     bg_resized = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False).name
@@ -258,27 +260,28 @@ def merge(chroma, bg_dir, output):
         "ffmpeg", "-y", "-i", bg_combined,
         "-t", str(chroma_dur),
         "-vf", "scale=-1:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black",
-        "-c:a", "copy", bg_resized
+        "-c:v", "libx264", "-c:a", "aac", "-b:a", "128k",
+        bg_resized
     ], check=True)
 
-    # دمج النتيجة النهائية
-    cmd = [
+    # دمج النتيجة النهائية مع الكروما
+    subprocess.run([
         "ffmpeg", "-y",
         "-i", bg_resized, "-i", chroma_resized,
         "-filter_complex", "[1:v]colorkey=0x000000:0.3:0.2[ck];[0:v][ck]overlay[outv]",
         "-map", "[outv]", "-map", "1:a?",
         "-c:v", "libx264", "-preset", "fast", "-crf", "23",
-        "-c:a", "aac", "-b:a", "128k", str(output)
-    ]
-    subprocess.run(cmd, check=True)
+        "-c:a", "aac", "-b:a", "128k",
+        str(output)
+    ], check=True)
 
     # حذف الملفات المؤقتة
     for f in bg_concat_list + [chroma_resized, bg_resized, bg_combined, concat_file.name]:
-        os.remove(f)
-
-# -----------------------------
-# 🚀 Main
-# -----------------------------
+        try:
+            os.remove(f)
+        except:
+            pass
+            
 # -----------------------------
 # 🚀 Main
 # -----------------------------

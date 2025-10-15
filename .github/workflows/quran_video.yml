@@ -5,6 +5,9 @@ on:
     - cron: "0 6 * * *"   # كل يوم الساعة 6:00 UTC = 7:00 بتوقيت الجزائر
   workflow_dispatch:       # تشغيل يدوي من GitHub عند الحاجة
 
+permissions:
+  contents: write
+
 jobs:
   generate:
     runs-on: ubuntu-latest

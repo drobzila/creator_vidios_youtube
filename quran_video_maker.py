@@ -340,7 +340,7 @@ async def main():
                 bg = random.choice(bg_list)
 
                 try:
-                    produce_final(chroma, bg, out_path)
+                    produce_final(chroma, bg, out_path, title)
                     print("✅ Created", out_name)
                     # رفع إلى Drive إن أمكن
                     if drive:

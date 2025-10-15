@@ -1,9 +1,17 @@
+هكذا 
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
 """
-📽️ Quran Video Maker — Auto short chromas downloader (≤ 60s)
-By Mohamed — Runs daily via GitHub Actions
+📽️ Quran Video Maker — v4 (Short Chromas < 60s)
+by Mohamed — Auto-run via GitHub Actions
+
+الوظائف:
+1. يجلب الكرومات (فيديوهات أقل من 60 ثانية) من قناة تلغرام.
+2. يجلب الخلفيات من Google Drive.
+3. يزيل الخلفية السوداء من الكروما ويضعها فوق الخلفية.
+4. يرفع الفيديو النهائي إلى Google Drive.
+5. يسجل كل العمليات في output_logs/history.log.
 """
 
 import os, io, sys, base64, sqlite3, asyncio, random, datetime, tempfile, subprocess
@@ -16,7 +24,7 @@ from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
 
 # -----------------------------
-# 🔧 إعدادات عامة
+# 🔧 الإعدادات العامة
 # -----------------------------
 api_id = 27874350
 api_hash = "a8cca90ec7d1023b8118163822f187c0"
@@ -28,9 +36,10 @@ REFRESH_TOKEN = "1//09SLS4A1oZYsJCgYIARAAGAkSNwF-L9IrQJneNmOVOAjihJWVMGFL2gYlLAd
 TOKEN_URI = "https://oauth2.googleapis.com/token"
 SCOPES = ["https://www.googleapis.com/auth/drive"]
 
-DRIVE_BG_FOLDER_ID = "1JYb3bI1PFJIHCPm8Vwm26b6vX7w5gL_C"
-DRIVE_OUTPUT_FOLDER_ID = "1lLKbFPovufWeEkwpCgI3cM-Je-Uee9el"
+DRIVE_BG_FOLDER_ID = "1JYb3bI1PFJIHCPm8Vwm26b6vX7w5gL_C"     # خلفيات
+DRIVE_OUTPUT_FOLDER_ID = "1lLKbFPovufWeEkwpCgI3cM-Je-Uee9el"  # ناتج
 
+# المسارات
 BASE_DIR = Path.cwd()
 CHROMAS_DIR = BASE_DIR / "chromas"
 BACKGROUND_DIR = BASE_DIR / "background_videos"
@@ -40,30 +49,17 @@ DB_PATH = BASE_DIR / "processed.db"
 for d in (CHROMAS_DIR, BACKGROUND_DIR, OUTPUTS_DIR, LOGS_DIR):
     d.mkdir(parents=True, exist_ok=True)
 
-# -----------------------------
-# 🧠 دالة الحصول على مدة الفيديو
-# -----------------------------
-def get_duration(video_path: str) -> float:
-    """إرجاع مدة الفيديو بالثواني باستخدام FFmpeg"""
-    try:
-        result = subprocess.run(
-            [
-                "ffprobe", "-v", "error",
-                "-show_entries", "format=duration",
-                "-of", "default=noprint_wrappers=1:nokey=1",
-                str(video_path)
-            ],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True
-        )
-        return float(result.stdout.strip())
-    except Exception as e:
-        print(f"⚠️ Failed to get duration for {video_path}: {e}")
-        return 0.0
+# إعدادات ffmpeg
+FFMPEG = "ffmpeg"
+VIDEO_CODEC = "libx264"
+AUDIO_CODEC = "aac"
+PRESET = "veryfast"
+CRF = "23"
+MAX_CHROMA_SEC = 60   # ⏱️ فقط أقل من 60 ثانية
+MAX_FILE_SIZE_MB = 10 # الحجم الأقصى 10MB
 
 # -----------------------------
-# 🔐 الجلسة
+# ⚙️ الجلسة
 # -----------------------------
 def ensure_telegram_session():
     session_file = BASE_DIR / "session.session"
@@ -73,6 +69,7 @@ def ensure_telegram_session():
 
     b64_file = BASE_DIR / "session.b64"
     if b64_file.exists():
+        print("📦 Decoding session.b64 file...")
         data = base64.b64decode(b64_file.read_bytes())
         session_file.write_bytes(data)
         os.chmod(session_file, 0o600)
@@ -80,16 +77,17 @@ def ensure_telegram_session():
 
     env_b64 = os.environ.get("TELEGRAM_SESSION_B64")
     if env_b64:
+        print("📦 Decoding TELEGRAM_SESSION_B64 from env...")
         data = base64.b64decode(env_b64)
         session_file.write_bytes(data)
         os.chmod(session_file, 0o600)
         return str(session_file)
 
-    print("⚠️ No session found.")
+    print("⚠️ No session found — Telethon will try to log in interactively.")
     return "session.session"
 
 # -----------------------------
-# 🧱 قاعدة بيانات
+# 🧱 قاعدة البيانات
 # -----------------------------
 def init_db():
     conn = sqlite3.connect(DB_PATH)
@@ -148,7 +146,7 @@ def upload_file(service, path, folder_id):
     return file['id']
 
 # -----------------------------
-# 📥 تحميل الكرومات القصيرة (≤ 60 ثانية)
+# 🤖 تلغرام: تحميل الكرومات (5 يوميًا)
 # -----------------------------
 async def fetch_chromas(api_id, api_hash, channel, session_path):
     client = TelegramClient(session_path, api_id, api_hash)
@@ -157,177 +155,157 @@ async def fetch_chromas(api_id, api_hash, channel, session_path):
     c = conn.cursor()
     new_files = []
 
-    MAX_DURATION = 60
-    DAILY_LIMIT = 5
-    DELAY = 5
+    MAX_CHROMA_SEC = 60       # أقصى مدة 60 ثانية
+    DAILY_LIMIT = 5            # 🟢 عدد الكرومات اليومية
+    DELAY_BETWEEN = 5          # ⏱️ تأخير 5 ثوانٍ بين كل تحميل
+
+    print(f"📡 Searching for up to {DAILY_LIMIT} new chromas (≤ {MAX_CHROMA_SEC}s)...")
 
     async for msg in client.iter_messages(channel, limit=None):
-        if not (msg.video or msg.document):
-            continue
-
+        video_file = None
         duration = None
-        if msg.video and msg.video.attributes:
-            for attr in msg.video.attributes:
-                if isinstance(attr, DocumentAttributeVideo):
-                    duration = attr.duration
-                    break
-        elif msg.document and msg.document.attributes:
-            for attr in msg.document.attributes:
-                if isinstance(attr, DocumentAttributeVideo):
-                    duration = attr.duration
+
+        # 🟢 الحالة 1: رسالة من نوع فيديو
+        if msg.video:
+            video_file = msg.video
+            duration = getattr(msg.video, "duration", None)
+
+        # 🟢 الحالة 2: رسالة من نوع Document ولكنها فيديو
+        elif msg.document and msg.document.mime_type and msg.document.mime_type.startswith("video/"):
+            video_file = msg.document
+            # نحاول استخراج المدة من الخصائص إن وُجدت
+            for attr in getattr(video_file, "attributes", []):
+                duration = getattr(attr, "duration", None)
+                if duration:
                     break
 
-        if not duration or duration > MAX_DURATION:
+        # ⛔ إذا لا يوجد فيديو أو المدة غير معروفة، تجاهله
+        if not video_file or not duration:
             continue
 
+        # ⛔ نتخطى الفيديوهات الطويلة
+        if duration > MAX_CHROMA_SEC:
+            continue
+
+        # ⛔ نتأكد إن لم تتم معالجته مسبقاً
         if c.execute("SELECT 1 FROM processed WHERE msg_id=?", (msg.id,)).fetchone():
             continue
 
         dest = CHROMAS_DIR / f"{msg.id}.mp4"
-        print(f"\n⬇️ Downloading short chroma {msg.id} ({round(duration)}s)...")
-        try:
-            await msg.download_media(file=str(dest))
-        except Exception as e:
-            print(f"⚠️ Failed to download {msg.id}: {e}")
-            continue
+        print(f"\n⬇️ Downloading chroma {msg.id} ({round(duration)}s)...")
 
+        # 🛡️ نحاول التحميل مع إعادة المحاولة
+        for attempt in range(3):
+            try:
+                await msg.download_media(file=str(dest))
+                break
+            except Exception as e:
+                print(f"⚠️ Retry {attempt+1}/3 due to {e}")
+                await asyncio.sleep(10)
+
+        # ✅ نسجّل في قاعدة البيانات
         c.execute("INSERT OR REPLACE INTO processed VALUES (?,?,?)",
                   (msg.id, dest.name, datetime.datetime.utcnow().isoformat()))
         conn.commit()
         new_files.append(dest)
 
-        if len(new_files) >= DAILY_LIMIT:
-            print("✅ Daily limit reached (5 short chromas).")
-            break
+        # 🕒 تأخير بسيط لتجنب حظر التلغرام
+        await asyncio.sleep(DELAY_BETWEEN)
 
-        await asyncio.sleep(DELAY)
+        # 🚫 نوقف بعد 5 فيديوهات
+        if len(new_files) >= DAILY_LIMIT:
+            print("⏹️ Daily limit (5 chromas) reached.")
+            break
 
     await client.disconnect()
     return new_files
 
 # -----------------------------
-# 🎬 دمج الكروما مع الخلفية
+# 🎬 الدمج عبر ffmpeg
 # -----------------------------
-def merge(chroma, bg_dir, output):
-    chroma_dur = get_duration(chroma)
+def get_duration(path):
+    cmd = ["ffprobe", "-v", "error", "-show_entries",
+           "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", str(path)]
+    out = subprocess.run(cmd, capture_output=True, text=True)
+    try:
+        return float(out.stdout.strip())
+    except:
+        return 0.0
 
-    # اختيار خلفيات متعددة لتغطية طول الكروما
-    bg_files = list(Path(bg_dir).glob("*.mp4"))
-    random.shuffle(bg_files)
+def merge(chroma, background, output):
+    dur = get_duration(chroma)
+    print(f"🎞 Merging {chroma.name} with {background.name} ({dur:.1f}s)...")
 
-    total_dur = 0
-    bg_concat_list = []
+    tmp_bg = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False).name
+    subprocess.run([FFMPEG, "-y", "-i", str(background), "-t", str(dur),
+                    "-c", "copy", tmp_bg], check=True)
 
-    # دمج خلفيات حتى تغطي طول الكروما
-    for bg in bg_files:
-        bg_dur = get_duration(bg)
-        part = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False).name
-        subprocess.run([
-            "ffmpeg", "-y", "-i", str(bg),
-            "-t", str(min(bg_dur, chroma_dur - total_dur)),
-            "-c:v", "libx264", "-c:a", "aac", "-b:a", "128k",
-            part
-        ], check=True)
-        bg_concat_list.append(part)
-        total_dur += bg_dur
-        if total_dur >= chroma_dur:
-            break
-
-    # إنشاء ملف نصي لتجميع الخلفيات المتعددة
-    concat_file = tempfile.NamedTemporaryFile(mode="w", delete=False)
-    for f in bg_concat_list:
-        concat_file.write(f"file '{f}'\n")
-    concat_file.close()
-
-    bg_combined = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False).name
-    subprocess.run([
-        "ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", concat_file.name,
-        "-c:v", "libx264", "-c:a", "aac", "-b:a", "128k",
-        bg_combined
-    ], check=True)
-
-    # ضبط المقاسات وتطبيق الكروما
-    chroma_resized = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False).name
-    subprocess.run([
-        "ffmpeg", "-y", "-i", str(chroma),
-        "-vf", "scale=-1:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black",
-        "-c:v", "libx264", "-c:a", "aac", "-b:a", "128k",
-        chroma_resized
-    ], check=True)
-
-    bg_resized = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False).name
-    subprocess.run([
-        "ffmpeg", "-y", "-i", bg_combined,
-        "-t", str(chroma_dur),
-        "-vf", "scale=-1:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black",
-        "-c:v", "libx264", "-c:a", "aac", "-b:a", "128k",
-        bg_resized
-    ], check=True)
-
-    # دمج النتيجة النهائية مع الكروما
-    subprocess.run([
-        "ffmpeg", "-y",
-        "-i", bg_resized, "-i", chroma_resized,
+    cmd = [
+        FFMPEG, "-y",
+        "-i", tmp_bg, "-i", str(chroma),
         "-filter_complex", "[1:v]colorkey=0x000000:0.3:0.2[ck];[0:v][ck]overlay[outv]",
         "-map", "[outv]", "-map", "1:a?",
-        "-c:v", "libx264", "-preset", "fast", "-crf", "23",
-        "-c:a", "aac", "-b:a", "128k",
+        "-c:v", VIDEO_CODEC, "-preset", PRESET, "-crf", CRF,
+        "-c:a", AUDIO_CODEC, "-b:a", "128k",
         str(output)
-    ], check=True)
+    ]
+    subprocess.run(cmd, check=True)
+    os.remove(tmp_bg)
 
-    # حذف الملفات المؤقتة
-    for f in bg_concat_list + [chroma_resized, bg_resized, bg_combined, concat_file.name]:
-        try:
-            os.remove(f)
-        except:
-            pass
-            
 # -----------------------------
-# 🚀 Main
+# 🚀 main()
 # -----------------------------
 async def main():
     session_path = ensure_telegram_session()
+    print("Session ready:", session_path)
+
     conn = init_db()
     drive = get_drive_service()
 
-    print("📥 Fetching new short chromas from Telegram...")
+    print("📥 Fetching chromas from Telegram...")
     chromas = await fetch_chromas(api_id, api_hash, channel_username, session_path)
     if not chromas:
-        print("⚠️ No new chromas found today.")
+        print("⚠️ No new chromas found.")
+        (LOGS_DIR / "history.log").touch(exist_ok=True)
         return
 
-    print("☁️ Syncing backgrounds...")
+    print("☁️ Fetching backgrounds from Google Drive...")
     bg_files = list_drive_files(drive, DRIVE_BG_FOLDER_ID)
+    if not bg_files:
+        print("❌ No backgrounds found.")
+        return
+
     for bg in bg_files:
         dest = BACKGROUND_DIR / bg["name"]
         if not dest.exists():
+            print(f"⬇️ Downloading background {bg['name']}...")
             download_file(drive, bg["id"], str(dest))
 
-    log_file = LOGS_DIR / f"uploaded_{datetime.datetime.now().strftime('%Y-%m-%d')}.txt"
+    bg_list = list(BACKGROUND_DIR.glob("*"))
+    if not bg_list:
+        print("❌ No local backgrounds available.")
+        return
 
     for chroma in chromas:
-        out_path = OUTPUTS_DIR / f"final_{chroma.stem}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
+        bg = random.choice(bg_list)
+        out_name = f"final_{chroma.stem}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
+        out_path = OUTPUTS_DIR / out_name
+
         try:
-            # التعديل هنا: تمرير المجلد BACKGROUND_DIR بدل القائمة bg_list
-            merge(chroma, BACKGROUND_DIR, out_path)
-            print(f"✅ Created {out_path.name}")
+            merge(chroma, bg, out_path)
+            print(f"✅ Created {out_name}")
             file_id = upload_file(drive, out_path, DRIVE_OUTPUT_FOLDER_ID)
-            print(f"☁️ Uploaded: {file_id}")
-
-            with open(log_file, "a", encoding="utf-8") as f:
-                f.write(f"{datetime.datetime.now().isoformat()} | {out_path.name} | DriveID: {file_id}\n")
-
-            os.remove(chroma)
-            os.remove(out_path)
-            print(f"🗑️ Deleted {chroma.name} and {out_path.name}")
-
+            print(f"☁️ Uploaded to Drive (ID: {file_id})")
+            with open(LOGS_DIR / "history.log", "a", encoding="utf-8") as f:
+                f.write(f"{datetime.datetime.utcnow().isoformat()} | {chroma.name} -> {out_name} | {file_id}\n")
         except Exception as e:
-            print(f"❌ Error with {chroma.name}: {e}")
+            print("❌ Merge or upload failed:", e)
 
     conn.close()
-    print(f"📝 Log saved to: {log_file}")
-    print("🏁 Done!")
-    
+    (LOGS_DIR / "history.log").touch(exist_ok=True)
+    print("🏁 Done.")
+
+# -----------------------------
 if __name__ == "__main__":
     try:
         asyncio.run(main())

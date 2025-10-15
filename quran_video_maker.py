@@ -26,9 +26,9 @@ api_id = 27874350
 api_hash = "a8cca90ec7d1023b8118163822f187c0"
 channel_username = "quranbng"
 
-CLIENT_ID = "553805965519-...apps.googleusercontent.com"
-CLIENT_SECRET = "GOCSPX-..."
-REFRESH_TOKEN = "1//09SLS4A1..."
+CLIENT_ID = "553805965519-1gvas0tmcl86v76k7m9bhkmc7m76657s.apps.googleusercontent.com"
+CLIENT_SECRET = "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"
+REFRESH_TOKEN = "1//09SLS4A1oZYsJCgYIARAAGAkSNwF-L9IrQJneNmOVOAjihJWVMGFL2gYlLAdg0Y_0SZg4bQPjbRR-qkDKYvbSS4weE7zrPh8w4_E"
 TOKEN_URI = "https://oauth2.googleapis.com/token"
 SCOPES = ["https://www.googleapis.com/auth/drive"]
 

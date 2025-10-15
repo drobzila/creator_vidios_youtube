@@ -41,6 +41,28 @@ for d in (CHROMAS_DIR, BACKGROUND_DIR, OUTPUTS_DIR, LOGS_DIR):
     d.mkdir(parents=True, exist_ok=True)
 
 # -----------------------------
+# 🧠 دالة الحصول على مدة الفيديو
+# -----------------------------
+def get_duration(video_path: str) -> float:
+    """إرجاع مدة الفيديو بالثواني باستخدام FFmpeg"""
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe", "-v", "error",
+                "-show_entries", "format=duration",
+                "-of", "default=noprint_wrappers=1:nokey=1",
+                str(video_path)
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True
+        )
+        return float(result.stdout.strip())
+    except Exception as e:
+        print(f"⚠️ Failed to get duration for {video_path}: {e}")
+        return 0.0
+
+# -----------------------------
 # 🔐 الجلسة
 # -----------------------------
 def ensure_telegram_session():
@@ -186,49 +208,32 @@ async def fetch_chromas(api_id, api_hash, channel, session_path):
 # -----------------------------
 # 🎬 دمج الكروما مع الخلفية
 # -----------------------------
-def merge(chroma, bg_dir, output):
+def merge(chroma, backgrounds, output):
     chroma_dur = get_duration(chroma)
-    bg_list = sorted(Path(bg_dir).glob("*.mp4"))  # ترتيب الخلفيات أبجديًا
-    if not bg_list:
-        raise RuntimeError("🚫 لا توجد خلفيات متوفرة!")
 
-    # 🧩 اختيار الخلفيات بالتتابع لتغطية المدة المطلوبة
-    selected_bgs = []
-    total_bg_dur = 0.0
-    bg_index = 0
+    combined = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False).name
+    total_bg = 0.0
+    bg_parts = []
 
-    while total_bg_dur < chroma_dur:
-        bg = bg_list[bg_index]
+    while total_bg < chroma_dur:
+        bg = random.choice(backgrounds)
         dur = get_duration(bg)
-        selected_bgs.append((bg, dur))
-        total_bg_dur += dur
-        bg_index = (bg_index + 1) % len(bg_list)  # حلقة دائرية عند نهاية القائمة
+        total_bg += dur
+        bg_parts.append(f"file '{bg}'")
 
-    print(f"🎞️ تم اختيار {len(selected_bgs)} خلفية بالتتابع لتغطية {round(chroma_dur, 1)} ثانية.")
+    list_path = tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False)
+    list_path.write("\n".join(bg_parts))
+    list_path.close()
 
-    # 🧱 دمج الخلفيات في فيديو واحد
-    concat_list_path = tempfile.NamedTemporaryFile(delete=False, suffix=".txt").name
-    with open(concat_list_path, "w", encoding="utf-8") as f:
-        for bg, _ in selected_bgs:
-            f.write(f"file '{bg.resolve()}'\n")
+    subprocess.run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", list_path.name,
+                    "-c", "copy", combined], check=True)
 
     tmp_bg = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False).name
-    subprocess.run([
-        "ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", concat_list_path,
-        "-c", "copy", tmp_bg
-    ], check=True)
+    subprocess.run(["ffmpeg", "-y", "-i", combined, "-t", str(chroma_dur), "-c", "copy", tmp_bg], check=True)
 
-    # ✂️ قص الخلفية المدمجة حسب طول الكروما
-    trimmed_bg = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False).name
-    subprocess.run([
-        "ffmpeg", "-y", "-i", tmp_bg, "-t", str(chroma_dur),
-        "-c", "copy", trimmed_bg
-    ], check=True)
-
-    # 🎨 دمج الكروما مع الخلفية
     cmd = [
         "ffmpeg", "-y",
-        "-i", trimmed_bg, "-i", str(chroma),
+        "-i", tmp_bg, "-i", str(chroma),
         "-filter_complex", "[1:v]colorkey=0x000000:0.3:0.2[ck];[0:v][ck]overlay[outv]",
         "-map", "[outv]", "-map", "1:a?",
         "-c:v", "libx264", "-preset", "fast", "-crf", "23",
@@ -236,10 +241,9 @@ def merge(chroma, bg_dir, output):
     ]
     subprocess.run(cmd, check=True)
 
-    # 🧹 تنظيف الملفات المؤقتة
-    os.remove(concat_list_path)
     os.remove(tmp_bg)
-    os.remove(trimmed_bg)
+    os.remove(combined)
+    os.remove(list_path.name)
 
 # -----------------------------
 # 🚀 Main
@@ -263,18 +267,28 @@ async def main():
             download_file(drive, bg["id"], str(dest))
 
     bg_list = list(BACKGROUND_DIR.glob("*.mp4"))
+    log_file = LOGS_DIR / f"uploaded_{datetime.datetime.now().strftime('%Y-%m-%d')}.txt"
+
     for chroma in chromas:
-        bg = random.choice(bg_list)
         out_path = OUTPUTS_DIR / f"final_{chroma.stem}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
         try:
-            merge(chroma, BACKGROUND_DIR, out_path)
+            merge(chroma, bg_list, out_path)
             print(f"✅ Created {out_path.name}")
             file_id = upload_file(drive, out_path, DRIVE_OUTPUT_FOLDER_ID)
             print(f"☁️ Uploaded: {file_id}")
+
+            with open(log_file, "a", encoding="utf-8") as f:
+                f.write(f"{datetime.datetime.now().isoformat()} | {out_path.name} | DriveID: {file_id}\n")
+
+            os.remove(chroma)
+            os.remove(out_path)
+            print(f"🗑️ Deleted {chroma.name} and {out_path.name}")
+
         except Exception as e:
             print(f"❌ Error with {chroma.name}: {e}")
 
     conn.close()
+    print(f"📝 Log saved to: {log_file}")
     print("🏁 Done!")
 
 if __name__ == "__main__":

@@ -3,7 +3,7 @@
 
 """
 📽️ Quran Video Maker — Auto short chromas downloader (≤ 60s)
-By Mohamed — Runs daily via GitHub Actions
+By Mohamed — Works with GitHub Actions
 """
 
 import os, io, sys, base64, sqlite3, asyncio, random, datetime, tempfile, subprocess
@@ -16,7 +16,7 @@ from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
 
 # -----------------------------
-# 🔧 إعدادات عامة
+# 🔧 إعدادات من متغيرات البيئة (Secrets)
 # -----------------------------
 api_id = 27874350
 api_hash = "a8cca90ec7d1023b8118163822f187c0"
@@ -30,7 +30,6 @@ SCOPES = ["https://www.googleapis.com/auth/drive"]
 
 DRIVE_BG_FOLDER_ID = "1JYb3bI1PFJIHCPm8Vwm26b6vX7w5gL_C"
 DRIVE_OUTPUT_FOLDER_ID = "1lLKbFPovufWeEkwpCgI3cM-Je-Uee9el"
-
 BASE_DIR = Path.cwd()
 CHROMAS_DIR = BASE_DIR / "chromas"
 BACKGROUND_DIR = BASE_DIR / "background_videos"
@@ -41,7 +40,7 @@ for d in (CHROMAS_DIR, BACKGROUND_DIR, OUTPUTS_DIR, LOGS_DIR):
     d.mkdir(parents=True, exist_ok=True)
 
 # -----------------------------
-# 🔐 الجلسة
+# 🔐 إنشاء جلسة التلغرام
 # -----------------------------
 def ensure_telegram_session():
     session_file = BASE_DIR / "session.session"
@@ -49,25 +48,19 @@ def ensure_telegram_session():
         print("✅ Using existing session.session file.")
         return str(session_file)
 
-    b64_file = BASE_DIR / "session.b64"
-    if b64_file.exists():
-        data = base64.b64decode(b64_file.read_bytes())
+    b64_data = os.getenv("TELEGRAM_SESSION_B64")
+    if b64_data:
+        data = base64.b64decode(b64_data)
         session_file.write_bytes(data)
         os.chmod(session_file, 0o600)
+        print("✅ Telegram session restored from Base64 secret.")
         return str(session_file)
 
-    env_b64 = os.environ.get("TELEGRAM_SESSION_B64")
-    if env_b64:
-        data = base64.b64decode(env_b64)
-        session_file.write_bytes(data)
-        os.chmod(session_file, 0o600)
-        return str(session_file)
-
-    print("⚠️ No session found.")
-    return "session.session"
+    print("⚠️ No Telegram session found.")
+    return str(session_file)
 
 # -----------------------------
-# 🧱 قاعدة بيانات
+# 🧱 قاعدة البيانات
 # -----------------------------
 def init_db():
     conn = sqlite3.connect(DB_PATH)
@@ -126,7 +119,7 @@ def upload_file(service, path, folder_id):
     return file['id']
 
 # -----------------------------
-# 📥 تحميل الكرومات القصيرة (≤ 60 ثانية)
+# 📥 تحميل كرومات قصيرة من التلغرام
 # -----------------------------
 async def fetch_chromas(api_id, api_hash, channel, session_path):
     client = TelegramClient(session_path, api_id, api_hash)
@@ -144,16 +137,11 @@ async def fetch_chromas(api_id, api_hash, channel, session_path):
             continue
 
         duration = None
-        if msg.video and msg.video.attributes:
-            for attr in msg.video.attributes:
-                if isinstance(attr, DocumentAttributeVideo):
-                    duration = attr.duration
-                    break
-        elif msg.document and msg.document.attributes:
-            for attr in msg.document.attributes:
-                if isinstance(attr, DocumentAttributeVideo):
-                    duration = attr.duration
-                    break
+        attrs = msg.video.attributes if msg.video else msg.document.attributes
+        for attr in attrs:
+            if isinstance(attr, DocumentAttributeVideo):
+                duration = attr.duration
+                break
 
         if not duration or duration > MAX_DURATION:
             continue
@@ -175,7 +163,7 @@ async def fetch_chromas(api_id, api_hash, channel, session_path):
         new_files.append(dest)
 
         if len(new_files) >= DAILY_LIMIT:
-            print("✅ Daily limit reached (5 short chromas).")
+            print("✅ Daily limit reached.")
             break
 
         await asyncio.sleep(DELAY)
@@ -214,6 +202,7 @@ def get_duration(path):
 # 🚀 Main
 # -----------------------------
 async def main():
+    print("🚀 Quran Video Maker started.")
     session_path = ensure_telegram_session()
     conn = init_db()
     drive = get_drive_service()
@@ -224,11 +213,12 @@ async def main():
         print("⚠️ No new chromas found today.")
         return
 
-    print("☁️ Syncing backgrounds...")
+    print("☁️ Syncing backgrounds from Google Drive...")
     bg_files = list_drive_files(drive, DRIVE_BG_FOLDER_ID)
     for bg in bg_files:
         dest = BACKGROUND_DIR / bg["name"]
         if not dest.exists():
+            print(f"⬇️ Downloading background: {bg['name']}")
             download_file(drive, bg["id"], str(dest))
 
     bg_list = list(BACKGROUND_DIR.glob("*.mp4"))

@@ -190,47 +190,54 @@ def get_duration(path):
 
 
 def merge(chroma, bg, output):
-    """🎬 دمج الكروما والخلفية بحجم فيديو شورت (1080x1920)"""
+    """🎬 دمج الكروما والخلفية بحجم 1080x1920 مع الحفاظ على صوت الكروما"""
     dur = get_duration(chroma)
 
-    # مؤقت للخلفية
+    # 🟩 تحجيم الخلفية
     tmp_bg = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False).name
     subprocess.run([
         "ffmpeg", "-y",
         "-i", str(bg),
         "-t", str(dur),
-        "-vf", "scale=1080:1920:force_original_aspect_ratio=decrease,"
-               "pad=1080:1920:(ow-iw)/2:(oh-ih)/2,setsar=1",
+        "-vf", (
+            "scale=1080:1920:force_original_aspect_ratio=decrease,"
+            "pad=1080:1920:(ow-iw)/2:(oh-ih)/2,setsar=1"
+        ),
         "-c:v", "libx264", "-preset", "fast", "-crf", "23",
         "-an", tmp_bg
     ], check=True)
 
-    # مؤقت للكروما
+    # 🟦 تحجيم الكروما (مع الصوت)
     tmp_chroma = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False).name
     subprocess.run([
         "ffmpeg", "-y",
         "-i", str(chroma),
-        "-vf", "scale=1080:1920:force_original_aspect_ratio=decrease,"
-               "pad=1080:1920:(ow-iw)/2:(oh-ih)/2,setsar=1",
+        "-vf", (
+            "scale=1080:1920:force_original_aspect_ratio=decrease,"
+            "pad=1080:1920:(ow-iw)/2:(oh-ih)/2,setsar=1"
+        ),
         "-c:v", "libx264", "-preset", "fast", "-crf", "23",
-        "-an", tmp_chroma
+        "-c:a", "aac", "-b:a", "128k",
+        tmp_chroma
     ], check=True)
 
-    # دمج نهائي
+    # 🧩 الدمج النهائي مع الصوت من الكروما فقط
     cmd = [
         "ffmpeg", "-y",
         "-i", tmp_bg, "-i", tmp_chroma,
         "-filter_complex",
         "[1:v]colorkey=0x000000:0.3:0.2[ck];[0:v][ck]overlay[outv]",
-        "-map", "[outv]", "-map", "1:a?",
+        "-map", "[outv]",   # الفيديو الناتج
+        "-map", "1:a?",     # الصوت من الكروما
         "-c:v", "libx264", "-preset", "fast", "-crf", "23",
-        "-c:a", "aac", "-b:a", "128k", str(output)
+        "-c:a", "aac", "-b:a", "128k",
+        str(output)
     ]
     subprocess.run(cmd, check=True)
 
     os.remove(tmp_bg)
     os.remove(tmp_chroma)
-    
+
 # -----------------------------
 # 🚀 Main
 # -----------------------------

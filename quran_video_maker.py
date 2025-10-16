@@ -16,7 +16,7 @@ from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
 
 # -----------------------------
-# 🔧 إعدادات من متغيرات البيئة (Secrets)
+# 🔧 الإعدادات
 # -----------------------------
 api_id = 27874350
 api_hash = "a8cca90ec7d1023b8118163822f187c0"
@@ -36,11 +36,13 @@ BACKGROUND_DIR = BASE_DIR / "background_videos"
 OUTPUTS_DIR = BASE_DIR / "outputs"
 LOGS_DIR = BASE_DIR / "output_logs"
 DB_PATH = BASE_DIR / "processed.db"
+LOG_FILE = BASE_DIR / "log.txt"
+
 for d in (CHROMAS_DIR, BACKGROUND_DIR, OUTPUTS_DIR, LOGS_DIR):
     d.mkdir(parents=True, exist_ok=True)
 
 # -----------------------------
-# 🔐 إنشاء جلسة التلغرام
+# 🔐 جلسة التلغرام
 # -----------------------------
 def ensure_telegram_session():
     session_file = BASE_DIR / "session.session"
@@ -172,10 +174,9 @@ async def fetch_chromas(api_id, api_hash, channel, session_path):
     return new_files
 
 # -----------------------------
-# 🎬 دمج الكروما مع الخلفية
+# 🎬 الدمج
 # -----------------------------
 def get_duration(path):
-    """📏 استخراج مدة الفيديو بالثواني"""
     cmd = [
         "ffprobe", "-v", "error",
         "-show_entries", "format=duration",
@@ -188,50 +189,33 @@ def get_duration(path):
     except:
         return 0.0
 
-
 def merge(chroma, bg, output):
-    """🎬 دمج الكروما والخلفية بحجم 1080x1920 مع الحفاظ على صوت الكروما"""
     dur = get_duration(chroma)
 
-    # 🟩 تحجيم الخلفية
     tmp_bg = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False).name
     subprocess.run([
-        "ffmpeg", "-y",
-        "-i", str(bg),
-        "-t", str(dur),
-        "-vf", (
-            "scale=1080:1920:force_original_aspect_ratio=decrease,"
-            "pad=1080:1920:(ow-iw)/2:(oh-ih)/2,setsar=1"
-        ),
-        "-c:v", "libx264", "-preset", "fast", "-crf", "23",
-        "-an", tmp_bg
+        "ffmpeg", "-y", "-i", str(bg), "-t", str(dur),
+        "-vf", "scale=1080:1920:force_original_aspect_ratio=decrease,"
+               "pad=1080:1920:(ow-iw)/2:(oh-ih)/2,setsar=1",
+        "-c:v", "libx264", "-preset", "fast", "-crf", "23", "-an", tmp_bg
     ], check=True)
 
-    # 🟦 تحجيم الكروما (مع الصوت)
     tmp_chroma = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False).name
     subprocess.run([
-        "ffmpeg", "-y",
-        "-i", str(chroma),
-        "-vf", (
-            "scale=1080:1920:force_original_aspect_ratio=decrease,"
-            "pad=1080:1920:(ow-iw)/2:(oh-ih)/2,setsar=1"
-        ),
+        "ffmpeg", "-y", "-i", str(chroma),
+        "-vf", "scale=1080:1920:force_original_aspect_ratio=decrease,"
+               "pad=1080:1920:(ow-iw)/2:(oh-ih)/2,setsar=1",
         "-c:v", "libx264", "-preset", "fast", "-crf", "23",
-        "-c:a", "aac", "-b:a", "128k",
-        tmp_chroma
+        "-c:a", "aac", "-b:a", "128k", tmp_chroma
     ], check=True)
 
-    # 🧩 الدمج النهائي مع الصوت من الكروما فقط
     cmd = [
-        "ffmpeg", "-y",
-        "-i", tmp_bg, "-i", tmp_chroma,
+        "ffmpeg", "-y", "-i", tmp_bg, "-i", tmp_chroma,
         "-filter_complex",
         "[1:v]colorkey=0x000000:0.3:0.2[ck];[0:v][ck]overlay[outv]",
-        "-map", "[outv]",   # الفيديو الناتج
-        "-map", "1:a?",     # الصوت من الكروما
+        "-map", "[outv]", "-map", "1:a?",
         "-c:v", "libx264", "-preset", "fast", "-crf", "23",
-        "-c:a", "aac", "-b:a", "128k",
-        str(output)
+        "-c:a", "aac", "-b:a", "128k", str(output)
     ]
     subprocess.run(cmd, check=True)
 
@@ -270,8 +254,25 @@ async def main():
             print(f"✅ Created {out_path.name}")
             file_id = upload_file(drive, out_path, DRIVE_OUTPUT_FOLDER_ID)
             print(f"☁️ Uploaded: {file_id}")
+
+            # 📝 سجل الكروما المستعملة
+            now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            with open(LOG_FILE, "a", encoding="utf-8") as f:
+                f.write(f"{now} - استخدمت الكروما: {chroma.name}\n")
+            print(f"🪶 Logged chroma {chroma.name}")
+
         except Exception as e:
             print(f"❌ Error with {chroma.name}: {e}")
+
+    # 💾 رفع السجل إلى GitHub
+    try:
+        if LOG_FILE.exists():
+            subprocess.run(["git", "add", "log.txt"], check=True)
+            subprocess.run(["git", "commit", "-m", "🪶 تحديث سجل الكرومات المستعملة"], check=False)
+            subprocess.run(["git", "push"], check=True)
+            print("✅ log.txt pushed successfully.")
+    except Exception as e:
+        print(f"❌ فشل رفع log.txt إلى GitHub: {e}")
 
     conn.close()
     print("🏁 Done!")

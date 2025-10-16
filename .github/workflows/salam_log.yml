@@ -6,6 +6,9 @@ on:
     - cron: '0 7 * * *'  # كل يوم الساعة 7 صباحًا UTC
   workflow_dispatch:      # يمكن تشغيله يدويًا أيضًا
 
+permissions:
+  contents: write   # 👈 ضروري حتى يُسمح له بالدفع (push)
+
 jobs:
   write-salam:
     runs-on: ubuntu-latest

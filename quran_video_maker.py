@@ -175,29 +175,44 @@ async def fetch_chromas(api_id, api_hash, channel, session_path):
 # 🎬 دمج الكروما مع الخلفية
 # -----------------------------
 def merge(chroma, bg, output):
+    # اجعل الطول مساوٍ لطول الكروما
     dur = get_duration(chroma)
     tmp_bg = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False).name
-    subprocess.run(["ffmpeg", "-y", "-i", str(bg), "-t", str(dur), "-c", "copy", tmp_bg], check=True)
+
+    # قص الخلفية لتتناسب مع مدة الكروما
+    subprocess.run([
+        "ffmpeg", "-y",
+        "-i", str(bg),
+        "-t", str(dur),
+        "-vf", "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2,setsar=1",
+        "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+        "-an", tmp_bg
+    ], check=True)
+
+    # إعادة تحجيم الكروما أيضًا
+    tmp_chroma = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False).name
+    subprocess.run([
+        "ffmpeg", "-y",
+        "-i", str(chroma),
+        "-vf", "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2,setsar=1",
+        "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+        "-an", tmp_chroma
+    ], check=True)
+
+    # دمج الكروما مع الخلفية بعد توحيد الحجم
     cmd = [
         "ffmpeg", "-y",
-        "-i", tmp_bg, "-i", str(chroma),
+        "-i", tmp_bg, "-i", tmp_chroma,
         "-filter_complex", "[1:v]colorkey=0x000000:0.3:0.2[ck];[0:v][ck]overlay[outv]",
         "-map", "[outv]", "-map", "1:a?",
         "-c:v", "libx264", "-preset", "fast", "-crf", "23",
         "-c:a", "aac", "-b:a", "128k", str(output)
     ]
     subprocess.run(cmd, check=True)
+
     os.remove(tmp_bg)
-
-def get_duration(path):
-    cmd = ["ffprobe", "-v", "error", "-show_entries",
-           "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", str(path)]
-    out = subprocess.run(cmd, capture_output=True, text=True)
-    try:
-        return float(out.stdout.strip())
-    except:
-        return 0.0
-
+    os.remove(tmp_chroma)
+    
 # -----------------------------
 # 🚀 Main
 # -----------------------------

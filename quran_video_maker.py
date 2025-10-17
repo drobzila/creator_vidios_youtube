@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 """
-📽️ Quran Video Maker — Auto short chromas downloader (≤ 60s)
+📽️ Quran Video Maker — Multi-background Support (≤ 60s)
 By Mohamed — Works with GitHub Actions
 """
 
@@ -74,22 +74,16 @@ def get_drive_service():
     creds.refresh(Request())
     return build("drive", "v3", credentials=creds, cache_discovery=False)
 
-
 def list_drive_files(service, folder_id):
     q = f"'{folder_id}' in parents and trashed=false"
     files, token = [], None
     while True:
-        res = service.files().list(
-            q=q, spaces="drive",
-            fields="nextPageToken, files(id,name)",
-            pageToken=token
-        ).execute()
+        res = service.files().list(q=q, spaces="drive", fields="nextPageToken, files(id,name)", pageToken=token).execute()
         files += res.get("files", [])
         token = res.get("nextPageToken")
         if not token:
             break
     return files
-
 
 def download_file(service, file_id, dest):
     req = service.files().get_media(fileId=file_id)
@@ -100,7 +94,6 @@ def download_file(service, file_id, dest):
         _, done = downloader.next_chunk()
     fh.close()
 
-
 def upload_file(service, path, folder_id):
     meta = {"name": path.name, "parents": [folder_id]}
     media = MediaFileUpload(str(path), resumable=True)
@@ -108,23 +101,21 @@ def upload_file(service, path, folder_id):
     return file["id"]
 
 # -----------------------------
-# 📥 تحميل كرومات قصيرة من التلغرام باستخدام log.txt
+# 📥 تحميل كرومات قصيرة من التلغرام
 # -----------------------------
 async def fetch_chromas(api_id, api_hash, channel, session_path):
     client = TelegramClient(session_path, api_id, api_hash)
     await client.start()
 
-    # 🧾 قراءة الكرومات المستعملة من log.txt
+    # قراءة log.txt لتجنب التكرار
     used_chromas = set()
     if LOG_FILE.exists():
         with open(LOG_FILE, "r", encoding="utf-8") as f:
             for line in f:
                 if "استخدمت الكروما:" in line:
-                    name = line.split("استخدمت الكروما:")[-1].strip()
-                    used_chromas.add(name)
+                    used_chromas.add(line.split("استخدمت الكروما:")[-1].strip())
 
-    print(f"📜 تم العثور على {len(used_chromas)} كرومات مستخدمة مسبقًا في log.txt")
-
+    print(f"📜 {len(used_chromas)} chromas already used.")
     new_files = []
     MAX_DURATION = 60
     DAILY_LIMIT = 5
@@ -134,95 +125,104 @@ async def fetch_chromas(api_id, api_hash, channel, session_path):
         if not (msg.video or msg.document):
             continue
 
-        # استخراج المدة
         duration = None
         attrs = msg.video.attributes if msg.video else msg.document.attributes
         for attr in attrs:
             if isinstance(attr, DocumentAttributeVideo):
                 duration = attr.duration
                 break
-
         if not duration or duration > MAX_DURATION:
             continue
 
-        chroma_name = f"{msg.id}.mp4"
-        if chroma_name in used_chromas:
-            print(f"⏩ تم تجاوز الكروما {chroma_name} لأنها موجودة في log.txt")
+        fname = f"{msg.id}.mp4"
+        if fname in used_chromas:
             continue
 
-        dest = CHROMAS_DIR / chroma_name
-        print(f"\n⬇️ Downloading short chroma {msg.id} ({round(duration)}s)...")
+        dest = CHROMAS_DIR / fname
+        print(f"\n⬇️ Downloading chroma {fname} ({round(duration)}s)")
         try:
             await msg.download_media(file=str(dest))
+            with open(LOG_FILE, "a", encoding="utf-8") as f:
+                now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                f.write(f"{now} - استخدمت الكروما: {fname}\n")
+            new_files.append(dest)
         except Exception as e:
-            print(f"⚠️ Failed to download {msg.id}: {e}")
+            print(f"⚠️ Failed: {e}")
             continue
 
-        new_files.append(dest)
-
-        # تسجيلها في log.txt مباشرة
-        now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        with open(LOG_FILE, "a", encoding="utf-8") as f:
-            f.write(f"{now} - استخدمت الكروما: {chroma_name}\n")
-
         if len(new_files) >= DAILY_LIMIT:
-            print("✅ Daily limit reached.")
             break
-
         await asyncio.sleep(DELAY)
 
     await client.disconnect()
     return new_files
 
 # -----------------------------
-# 🎬 الدمج
+# 🎬 الدمج بعدة خلفيات
 # -----------------------------
 def get_duration(path):
-    cmd = [
-        "ffprobe", "-v", "error",
-        "-show_entries", "format=duration",
-        "-of", "default=noprint_wrappers=1:nokey=1",
-        str(path),
-    ]
+    cmd = ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+           "-of", "default=noprint_wrappers=1:nokey=1", str(path)]
     out = subprocess.run(cmd, capture_output=True, text=True)
     try:
         return float(out.stdout.strip())
     except:
         return 0.0
 
+def extend_backgrounds(bg_list, target_dur):
+    """دمج عدة خلفيات لتغطية طول الكروما"""
+    random.shuffle(bg_list)
+    total, files = 0, []
+    for bg in bg_list:
+        d = get_duration(bg)
+        if d == 0:
+            continue
+        files.append(bg)
+        total += d
+        if total >= target_dur:
+            break
+    if not files:
+        raise RuntimeError("❌ لا توجد خلفيات صالحة.")
+    # دمج الخلفيات مؤقتًا
+    list_file = tempfile.NamedTemporaryFile(delete=False, suffix=".txt")
+    with open(list_file.name, "w") as f:
+        for bg in files:
+            f.write(f"file '{bg}'\n")
+    out_path = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
+    subprocess.run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", list_file.name,
+                    "-c", "copy", out_path], check=True)
+    return out_path
 
-def merge(chroma, bg, output):
-    dur = get_duration(chroma)
+def merge(chroma, bg_list, output):
+    chroma_dur = get_duration(chroma)
+    bg_path = extend_backgrounds(bg_list, chroma_dur)
 
-    tmp_bg = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False).name
     subprocess.run([
-        "ffmpeg", "-y", "-i", str(bg), "-t", str(dur),
+        "ffmpeg", "-y", "-i", bg_path, "-t", str(chroma_dur),
         "-vf", "scale=1080:1920:force_original_aspect_ratio=decrease,"
                "pad=1080:1920:(ow-iw)/2:(oh-ih)/2,setsar=1",
-        "-c:v", "libx264", "-preset", "fast", "-crf", "23", "-an", tmp_bg
+        "-an", "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+        "bg_scaled.mp4"
     ], check=True)
 
-    tmp_chroma = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False).name
     subprocess.run([
-        "ffmpeg", "-y", "-i", str(chroma),
+        "ffmpeg", "-y", "-i", chroma,
         "-vf", "scale=1080:1920:force_original_aspect_ratio=decrease,"
                "pad=1080:1920:(ow-iw)/2:(oh-ih)/2,setsar=1",
         "-c:v", "libx264", "-preset", "fast", "-crf", "23",
-        "-c:a", "aac", "-b:a", "128k", tmp_chroma
+        "-c:a", "aac", "-b:a", "128k", "chroma_scaled.mp4"
     ], check=True)
 
-    cmd = [
-        "ffmpeg", "-y", "-i", tmp_bg, "-i", tmp_chroma,
-        "-filter_complex",
-        "[1:v]colorkey=0x000000:0.3:0.2[ck];[0:v][ck]overlay[outv]",
-        "-map", "[outv]", "-map", "1:a?",
-        "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+    subprocess.run([
+        "ffmpeg", "-y", "-i", "bg_scaled.mp4", "-i", "chroma_scaled.mp4",
+        "-filter_complex", "[1:v]colorkey=0x000000:0.3:0.2[ck];[0:v][ck]overlay[outv]",
+        "-map", "[outv]", "-map", "1:a?", "-c:v", "libx264", "-preset", "fast", "-crf", "23",
         "-c:a", "aac", "-b:a", "128k", str(output)
-    ]
-    subprocess.run(cmd, check=True)
+    ], check=True)
 
-    os.remove(tmp_bg)
-    os.remove(tmp_chroma)
+    os.remove(bg_path)
+    os.remove("bg_scaled.mp4")
+    os.remove("chroma_scaled.mp4")
 
 # -----------------------------
 # 🚀 Main
@@ -232,41 +232,40 @@ async def main():
     session_path = ensure_telegram_session()
     drive = get_drive_service()
 
-    print("📥 Fetching new short chromas from Telegram...")
+    print("📥 Fetching new chromas...")
     chromas = await fetch_chromas(api_id, api_hash, channel_username, session_path)
     if not chromas:
-        print("⚠️ No new chromas found today.")
+        print("⚠️ No new chromas today.")
         return
 
-    print("☁️ Syncing backgrounds from Google Drive...")
+    print("☁️ Syncing backgrounds...")
     bg_files = list_drive_files(drive, DRIVE_BG_FOLDER_ID)
     for bg in bg_files:
         dest = BACKGROUND_DIR / bg["name"]
         if not dest.exists():
-            print(f"⬇️ Downloading background: {bg['name']}")
+            print(f"⬇️ Downloading {bg['name']}")
             download_file(drive, bg["id"], str(dest))
 
     bg_list = list(BACKGROUND_DIR.glob("*.mp4"))
     for chroma in chromas:
-        bg = random.choice(bg_list)
         out_path = OUTPUTS_DIR / f"final_{chroma.stem}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
         try:
-            merge(chroma, bg, out_path)
+            merge(chroma, bg_list, out_path)
             print(f"✅ Created {out_path.name}")
-            file_id = upload_file(drive, out_path, DRIVE_OUTPUT_FOLDER_ID)
-            print(f"☁️ Uploaded: {file_id}")
+            fid = upload_file(drive, out_path, DRIVE_OUTPUT_FOLDER_ID)
+            print(f"☁️ Uploaded {fid}")
         except Exception as e:
-            print(f"❌ Error with {chroma.name}: {e}")
+            print(f"❌ Error {chroma.name}: {e}")
 
-    # 💾 رفع السجل إلى GitHub
+    # رفع السجل إلى GitHub
     try:
-        if LOG_FILE.exists():
-            subprocess.run(["git", "add", "log.txt"], check=True)
-            subprocess.run(["git", "commit", "-m", "🪶 تحديث سجل الكرومات المستعملة"], check=False)
-            subprocess.run(["git", "push"], check=True)
-            print("✅ log.txt pushed successfully.")
+        subprocess.run(["git", "pull", "--rebase"], check=False)
+        subprocess.run(["git", "add", "log.txt"], check=True)
+        subprocess.run(["git", "commit", "-m", "🪶 تحديث سجل الكرومات"], check=False)
+        subprocess.run(["git", "push"], check=True)
+        print("✅ log.txt pushed.")
     except Exception as e:
-        print(f"❌ فشل رفع log.txt إلى GitHub: {e}")
+        print(f"❌ Push failed: {e}")
 
     print("🏁 Done!")
 

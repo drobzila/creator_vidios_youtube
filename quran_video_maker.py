@@ -177,31 +177,56 @@ def get_duration(path):
 # -----------------------------
 # 🎬 الدمج بعدة خلفيات
 # -----------------------------
-def get_duration(path):
-    cmd = [
-        "ffprobe", "-v", "error",
-        "-show_entries", "format=duration",
-        "-of", "default=noprint_wrappers=1:nokey=1",
-        str(path),
-    ]
-    out = subprocess.run(cmd, capture_output=True, text=True)
-    try:
-        return float(out.stdout.strip())
-    except:
-        return 0.0
+def merge(chroma, bg_list, output):
+    chroma_dur = get_duration(chroma)
+    if chroma_dur <= 0:
+        print(f"⚠️ الكروما {chroma} غير صالحة (مدة = {chroma_dur})")
+        return
 
+    # 🎲 اختيار خلفية عشوائية
+    valid_bgs = [b for b in bg_list if get_duration(b) > 0]
+    if not valid_bgs:
+        print("⚠️ لا توجد خلفيات صالحة.")
+        return
 
-def merge(chroma, bg, output):
-    dur = get_duration(chroma)
+    bg = random.choice(valid_bgs)
+    bg_dur = get_duration(bg)
+    print(f"🎲 تم اختيار الخلفية العشوائية: {bg.name} ({round(bg_dur)}s)")
+
+    # ⚙️ في حال الخلفية أقصر من الكروما → نختار خلفيات أخرى لإكمال الطول
+    total_duration = bg_dur
+    selected_bgs = [bg]
+
+    while total_duration < chroma_dur:
+        next_bg = random.choice(valid_bgs)
+        total_duration += get_duration(next_bg)
+        selected_bgs.append(next_bg)
+
+    # 🧩 دمج الخلفيات المختارة في فيديو واحد مؤقت
+    bg_list_txt = tempfile.NamedTemporaryFile(mode="w+", delete=False, suffix=".txt")
+    for bg in selected_bgs:
+        bg_list_txt.write(f"file '{bg.resolve()}'\n")
+    bg_list_txt.close()
 
     tmp_bg = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False).name
     subprocess.run([
-        "ffmpeg", "-y", "-i", str(bg), "-t", str(dur),
+        "ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", bg_list_txt.name,
+        "-t", str(chroma_dur),
+        "-c", "copy", tmp_bg
+    ], check=True)
+    os.remove(bg_list_txt.name)
+
+    # 🎨 تهيئة الخلفية بدقة 1080x1920
+    tmp_bg_scaled = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False).name
+    subprocess.run([
+        "ffmpeg", "-y", "-i", tmp_bg,
         "-vf", "scale=1080:1920:force_original_aspect_ratio=decrease,"
                "pad=1080:1920:(ow-iw)/2:(oh-ih)/2,setsar=1",
-        "-c:v", "libx264", "-preset", "fast", "-crf", "23", "-an", tmp_bg
+        "-an", "-preset", "fast", "-crf", "23", tmp_bg_scaled
     ], check=True)
+    os.remove(tmp_bg)
 
+    # 🎬 تجهيز الكروما
     tmp_chroma = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False).name
     subprocess.run([
         "ffmpeg", "-y", "-i", str(chroma),
@@ -211,17 +236,18 @@ def merge(chroma, bg, output):
         "-c:a", "aac", "-b:a", "128k", tmp_chroma
     ], check=True)
 
-    cmd = [
-        "ffmpeg", "-y", "-i", tmp_bg, "-i", tmp_chroma,
+    # 🧩 الدمج النهائي بين الخلفية والكروما
+    subprocess.run([
+        "ffmpeg", "-y", "-i", tmp_bg_scaled, "-i", tmp_chroma,
         "-filter_complex",
         "[1:v]colorkey=0x000000:0.3:0.2[ck];[0:v][ck]overlay[outv]",
         "-map", "[outv]", "-map", "1:a?",
         "-c:v", "libx264", "-preset", "fast", "-crf", "23",
         "-c:a", "aac", "-b:a", "128k", str(output)
-    ]
-    subprocess.run(cmd, check=True)
+    ], check=True)
 
-    os.remove(tmp_bg)
+    # 🧹 تنظيف الملفات المؤقتة
+    os.remove(tmp_bg_scaled)
     os.remove(tmp_chroma)
 
 # -----------------------------

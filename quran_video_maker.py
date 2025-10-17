@@ -6,7 +6,7 @@
 By Mohamed — Works with GitHub Actions
 """
 
-import os, io, sys, base64, sqlite3, asyncio, random, datetime, tempfile, subprocess
+import os, io, sys, base64, asyncio, random, datetime, tempfile, subprocess
 from pathlib import Path
 from telethon import TelegramClient
 from telethon.tl.types import DocumentAttributeVideo
@@ -34,11 +34,9 @@ BASE_DIR = Path.cwd()
 CHROMAS_DIR = BASE_DIR / "chromas"
 BACKGROUND_DIR = BASE_DIR / "background_videos"
 OUTPUTS_DIR = BASE_DIR / "outputs"
-LOGS_DIR = BASE_DIR / "output_logs"
-DB_PATH = BASE_DIR / "processed.db"
 LOG_FILE = BASE_DIR / "log.txt"
 
-for d in (CHROMAS_DIR, BACKGROUND_DIR, OUTPUTS_DIR, LOGS_DIR):
+for d in (CHROMAS_DIR, BACKGROUND_DIR, OUTPUTS_DIR):
     d.mkdir(parents=True, exist_ok=True)
 
 # -----------------------------
@@ -62,20 +60,6 @@ def ensure_telegram_session():
     return str(session_file)
 
 # -----------------------------
-# 🧱 قاعدة البيانات
-# -----------------------------
-def init_db():
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("""CREATE TABLE IF NOT EXISTS processed(
-        msg_id INTEGER PRIMARY KEY,
-        filename TEXT,
-        processed_at TEXT
-    )""")
-    conn.commit()
-    return conn
-
-# -----------------------------
 # ☁️ Google Drive
 # -----------------------------
 def get_drive_service():
@@ -88,48 +72,60 @@ def get_drive_service():
         scopes=SCOPES,
     )
     creds.refresh(Request())
-    return build('drive', 'v3', credentials=creds, cache_discovery=False)
+    return build("drive", "v3", credentials=creds, cache_discovery=False)
+
 
 def list_drive_files(service, folder_id):
     q = f"'{folder_id}' in parents and trashed=false"
     files, token = [], None
     while True:
         res = service.files().list(
-            q=q, spaces='drive',
-            fields='nextPageToken, files(id,name)',
+            q=q, spaces="drive",
+            fields="nextPageToken, files(id,name)",
             pageToken=token
         ).execute()
-        files += res.get('files', [])
-        token = res.get('nextPageToken')
+        files += res.get("files", [])
+        token = res.get("nextPageToken")
         if not token:
             break
     return files
 
+
 def download_file(service, file_id, dest):
     req = service.files().get_media(fileId=file_id)
-    fh = io.FileIO(dest, 'wb')
+    fh = io.FileIO(dest, "wb")
     downloader = MediaIoBaseDownload(fh, req)
     done = False
     while not done:
         _, done = downloader.next_chunk()
     fh.close()
 
+
 def upload_file(service, path, folder_id):
-    meta = {'name': path.name, 'parents': [folder_id]}
+    meta = {"name": path.name, "parents": [folder_id]}
     media = MediaFileUpload(str(path), resumable=True)
-    file = service.files().create(body=meta, media_body=media, fields='id').execute()
-    return file['id']
+    file = service.files().create(body=meta, media_body=media, fields="id").execute()
+    return file["id"]
 
 # -----------------------------
-# 📥 تحميل كرومات قصيرة من التلغرام
+# 📥 تحميل كرومات قصيرة من التلغرام باستخدام log.txt
 # -----------------------------
 async def fetch_chromas(api_id, api_hash, channel, session_path):
     client = TelegramClient(session_path, api_id, api_hash)
     await client.start()
-    conn = init_db()
-    c = conn.cursor()
-    new_files = []
 
+    # 🧾 قراءة الكرومات المستعملة من log.txt
+    used_chromas = set()
+    if LOG_FILE.exists():
+        with open(LOG_FILE, "r", encoding="utf-8") as f:
+            for line in f:
+                if "استخدمت الكروما:" in line:
+                    name = line.split("استخدمت الكروما:")[-1].strip()
+                    used_chromas.add(name)
+
+    print(f"📜 تم العثور على {len(used_chromas)} كرومات مستخدمة مسبقًا في log.txt")
+
+    new_files = []
     MAX_DURATION = 60
     DAILY_LIMIT = 5
     DELAY = 5
@@ -138,6 +134,7 @@ async def fetch_chromas(api_id, api_hash, channel, session_path):
         if not (msg.video or msg.document):
             continue
 
+        # استخراج المدة
         duration = None
         attrs = msg.video.attributes if msg.video else msg.document.attributes
         for attr in attrs:
@@ -148,10 +145,12 @@ async def fetch_chromas(api_id, api_hash, channel, session_path):
         if not duration or duration > MAX_DURATION:
             continue
 
-        if c.execute("SELECT 1 FROM processed WHERE msg_id=?", (msg.id,)).fetchone():
+        chroma_name = f"{msg.id}.mp4"
+        if chroma_name in used_chromas:
+            print(f"⏩ تم تجاوز الكروما {chroma_name} لأنها موجودة في log.txt")
             continue
 
-        dest = CHROMAS_DIR / f"{msg.id}.mp4"
+        dest = CHROMAS_DIR / chroma_name
         print(f"\n⬇️ Downloading short chroma {msg.id} ({round(duration)}s)...")
         try:
             await msg.download_media(file=str(dest))
@@ -159,10 +158,12 @@ async def fetch_chromas(api_id, api_hash, channel, session_path):
             print(f"⚠️ Failed to download {msg.id}: {e}")
             continue
 
-        c.execute("INSERT OR REPLACE INTO processed VALUES (?,?,?)",
-                  (msg.id, dest.name, datetime.datetime.utcnow().isoformat()))
-        conn.commit()
         new_files.append(dest)
+
+        # تسجيلها في log.txt مباشرة
+        now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with open(LOG_FILE, "a", encoding="utf-8") as f:
+            f.write(f"{now} - استخدمت الكروما: {chroma_name}\n")
 
         if len(new_files) >= DAILY_LIMIT:
             print("✅ Daily limit reached.")
@@ -181,13 +182,14 @@ def get_duration(path):
         "ffprobe", "-v", "error",
         "-show_entries", "format=duration",
         "-of", "default=noprint_wrappers=1:nokey=1",
-        str(path)
+        str(path),
     ]
     out = subprocess.run(cmd, capture_output=True, text=True)
     try:
         return float(out.stdout.strip())
     except:
         return 0.0
+
 
 def merge(chroma, bg, output):
     dur = get_duration(chroma)
@@ -228,7 +230,6 @@ def merge(chroma, bg, output):
 async def main():
     print("🚀 Quran Video Maker started.")
     session_path = ensure_telegram_session()
-    conn = init_db()
     drive = get_drive_service()
 
     print("📥 Fetching new short chromas from Telegram...")
@@ -254,13 +255,6 @@ async def main():
             print(f"✅ Created {out_path.name}")
             file_id = upload_file(drive, out_path, DRIVE_OUTPUT_FOLDER_ID)
             print(f"☁️ Uploaded: {file_id}")
-
-            # 📝 سجل الكروما المستعملة
-            now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            with open(LOG_FILE, "a", encoding="utf-8") as f:
-                f.write(f"{now} - استخدمت الكروما: {chroma.name}\n")
-            print(f"🪶 Logged chroma {chroma.name}")
-
         except Exception as e:
             print(f"❌ Error with {chroma.name}: {e}")
 
@@ -274,7 +268,6 @@ async def main():
     except Exception as e:
         print(f"❌ فشل رفع log.txt إلى GitHub: {e}")
 
-    conn.close()
     print("🏁 Done!")
 
 if __name__ == "__main__":

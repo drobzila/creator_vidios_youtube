@@ -2,7 +2,7 @@ name: Quran Video Generator 🎥
 
 on:
   schedule:
-    - cron: "0 6 * * *"   # كل يوم الساعة 6:00 UTC = 7:00 صباحًا بتوقيت الجزائر
+    - cron: "0 4 * * *"   # كل يوم الساعة 4:00 UTC = 5:00 صباحًا بتوقيت الجزائر
   workflow_dispatch:
 
 permissions:

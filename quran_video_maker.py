@@ -158,6 +158,23 @@ async def fetch_chromas(api_id, api_hash, channel, session_path):
     return new_files
 
 # -----------------------------
+# ⏱️ حساب مدة الفيديو
+# -----------------------------
+def get_duration(path):
+    """إرجاع مدة الفيديو بالثواني"""
+    cmd = [
+        "ffprobe", "-v", "error",
+        "-show_entries", "format=duration",
+        "-of", "default=noprint_wrappers=1:nokey=1",
+        str(path),
+    ]
+    out = subprocess.run(cmd, capture_output=True, text=True)
+    try:
+        return float(out.stdout.strip())
+    except:
+        return 0.0
+
+# -----------------------------
 # 🎬 الدمج بعدة خلفيات
 # -----------------------------
 def merge(chroma, bg, output):

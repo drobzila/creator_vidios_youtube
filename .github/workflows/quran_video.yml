@@ -24,16 +24,12 @@ jobs:
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git config --global user.name "github-actions[bot]"
 
-      # 🧠 قراءة سجل الكرومات القديمة من log.txt (إن وجد)
-      - name: 📖 Read used chromas log
-        id: read_log
-        run: |
-          if [ -f log.txt ]; then
-            echo "✅ Found previous log.txt file:"
-            cat log.txt
-          else
-            echo "⚠️ No previous log.txt found. A new one will be created."
-          fi
+      - name: 🔄 Restore processed.db
+        uses: actions/download-artifact@v4
+        with:
+          name: processed-db
+          path: .
+        continue-on-error: true
 
       - name: 🐍 Setup Python 3.10
         uses: actions/setup-python@v4
@@ -62,11 +58,8 @@ jobs:
           echo "🚀 Starting Quran Video Generator..."
           python quran_video_maker.py
 
-      # 🪶 رفع ملف log.txt إلى الريبو بعد كل تشغيل
-      - name: 🪶 Commit and Push log.txt
-        run: |
-          if [ -f log.txt ]; then
-            git add log.txt
-            git commit -m "🪶 تحديث سجل الكرومات المستعملة ($(date +'%Y-%m-%d %H:%M'))" || echo "No changes to commit"
-            git push
-          fi
+      - name: 📦 Save processed database
+        uses: actions/upload-artifact@v4
+        with:
+          name: processed-db
+          path: processed.db

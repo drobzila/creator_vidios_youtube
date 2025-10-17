@@ -160,69 +160,62 @@ async def fetch_chromas(api_id, api_hash, channel, session_path):
 # -----------------------------
 # 🎬 الدمج بعدة خلفيات
 # -----------------------------
-def get_duration(path):
-    cmd = ["ffprobe", "-v", "error", "-show_entries", "format=duration",
-           "-of", "default=noprint_wrappers=1:nokey=1", str(path)]
-    out = subprocess.run(cmd, capture_output=True, text=True)
-    try:
-        return float(out.stdout.strip())
-    except:
-        return 0.0
-
-def extend_backgrounds(bg_list, target_dur):
-    """دمج عدة خلفيات لتغطية طول الكروما"""
-    random.shuffle(bg_list)
-    total, files = 0, []
-    for bg in bg_list:
-        d = get_duration(bg)
-        if d == 0:
-            continue
-        files.append(bg)
-        total += d
-        if total >= target_dur:
-            break
-    if not files:
-        raise RuntimeError("❌ لا توجد خلفيات صالحة.")
-    # دمج الخلفيات مؤقتًا
-    list_file = tempfile.NamedTemporaryFile(delete=False, suffix=".txt")
-    with open(list_file.name, "w") as f:
-        for bg in files:
-            f.write(f"file '{bg}'\n")
-    out_path = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
-    subprocess.run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", list_file.name,
-                    "-c", "copy", out_path], check=True)
-    return out_path
-
-def merge(chroma, bg_list, output):
+def merge(chroma, bg, output):
     chroma_dur = get_duration(chroma)
-    bg_path = extend_backgrounds(bg_list, chroma_dur)
+    bg_dur = get_duration(bg)
 
-    subprocess.run([
-        "ffmpeg", "-y", "-i", bg_path, "-t", str(chroma_dur),
-        "-vf", "scale=1080:1920:force_original_aspect_ratio=decrease,"
-               "pad=1080:1920:(ow-iw)/2:(oh-ih)/2,setsar=1",
-        "-an", "-c:v", "libx264", "-preset", "fast", "-crf", "23",
-        "bg_scaled.mp4"
-    ], check=True)
+    # ⚙️ إذا كانت الخلفية أقصر من الكروما → نكررها
+    if bg_dur < chroma_dur:
+        loops = int(chroma_dur // bg_dur) + 1
+        tmp_looped = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False).name
+        print(f"🔁 تكرار الخلفية {loops} مرات لتطابق طول الكروما ({round(chroma_dur)}s)")
+        subprocess.run([
+            "ffmpeg", "-y",
+            "-stream_loop", str(loops - 1),
+            "-i", str(bg),
+            "-t", str(chroma_dur),
+            "-vf", "scale=1080:1920:force_original_aspect_ratio=decrease,"
+                   "pad=1080:1920:(ow-iw)/2:(oh-ih)/2,setsar=1",
+            "-c:v", "libx264", "-preset", "fast", "-crf", "23", "-an",
+            tmp_looped
+        ], check=True)
+        bg_path = tmp_looped
+    else:
+        # إذا كانت الخلفية أطول → نقصها فقط
+        tmp_trimmed = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False).name
+        subprocess.run([
+            "ffmpeg", "-y", "-i", str(bg), "-t", str(chroma_dur),
+            "-vf", "scale=1080:1920:force_original_aspect_ratio=decrease,"
+                   "pad=1080:1920:(ow-iw)/2:(oh-ih)/2,setsar=1",
+            "-c:v", "libx264", "-preset", "fast", "-crf", "23", "-an",
+            tmp_trimmed
+        ], check=True)
+        bg_path = tmp_trimmed
 
+    # 🎬 تجهيز الكروما بنفس الحجم
+    tmp_chroma = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False).name
     subprocess.run([
-        "ffmpeg", "-y", "-i", chroma,
+        "ffmpeg", "-y", "-i", str(chroma),
         "-vf", "scale=1080:1920:force_original_aspect_ratio=decrease,"
                "pad=1080:1920:(ow-iw)/2:(oh-ih)/2,setsar=1",
         "-c:v", "libx264", "-preset", "fast", "-crf", "23",
-        "-c:a", "aac", "-b:a", "128k", "chroma_scaled.mp4"
+        "-c:a", "aac", "-b:a", "128k", tmp_chroma
     ], check=True)
 
-    subprocess.run([
-        "ffmpeg", "-y", "-i", "bg_scaled.mp4", "-i", "chroma_scaled.mp4",
-        "-filter_complex", "[1:v]colorkey=0x000000:0.3:0.2[ck];[0:v][ck]overlay[outv]",
-        "-map", "[outv]", "-map", "1:a?", "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+    # 🧩 دمج الكروما مع الخلفية
+    cmd = [
+        "ffmpeg", "-y", "-i", bg_path, "-i", tmp_chroma,
+        "-filter_complex",
+        "[1:v]colorkey=0x000000:0.3:0.2[ck];[0:v][ck]overlay[outv]",
+        "-map", "[outv]", "-map", "1:a?",
+        "-c:v", "libx264", "-preset", "fast", "-crf", "23",
         "-c:a", "aac", "-b:a", "128k", str(output)
-    ], check=True)
+    ]
+    subprocess.run(cmd, check=True)
 
+    # 🧹 تنظيف الملفات المؤقتة
+    os.remove(tmp_chroma)
     os.remove(bg_path)
-    os.remove("bg_scaled.mp4")
-    os.remove("chroma_scaled.mp4")
 
 # -----------------------------
 # 🚀 Main

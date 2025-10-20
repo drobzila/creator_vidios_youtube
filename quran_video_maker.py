@@ -101,7 +101,7 @@ def upload_file(service, path, folder_id):
     return file["id"]
 
 # -----------------------------
-# 📥 تحميل كرومات قصيرة من التلغرام
+# 📥 تحميل كرومات قصيرة من التلغرام (بأسمائها الأصلية + تنظيم السجل)
 # -----------------------------
 async def fetch_chromas(api_id, api_hash, channel, session_path):
     client = TelegramClient(session_path, api_id, api_hash)
@@ -121,37 +121,52 @@ async def fetch_chromas(api_id, api_hash, channel, session_path):
     DAILY_LIMIT = 5
     DELAY = 5
 
+    today = datetime.datetime.now().strftime("%Y-%m-%d")
+    new_day_header = f"\n📅 === بدء دفعة {today} ===\n"
+
+    with open(LOG_FILE, "a", encoding="utf-8") as f:
+        f.write(new_day_header)
+
     async for msg in client.iter_messages(channel, limit=None):
         if not (msg.video or msg.document):
             continue
 
+        # استخراج المدة
         duration = None
         attrs = msg.video.attributes if msg.video else msg.document.attributes
         for attr in attrs:
             if isinstance(attr, DocumentAttributeVideo):
                 duration = attr.duration
                 break
+
         if not duration or duration > MAX_DURATION:
             continue
 
-        fname = f"{msg.id}.mp4"
-        if fname in used_chromas:
+        # 🧩 استخدم الاسم الأصلي للفيديو إن وجد
+        fname = msg.file.name or f"{msg.id}.mp4"
+        safe_name = fname.replace(" ", "_").replace("/", "_")
+
+        if safe_name in used_chromas:
             continue
 
-        dest = CHROMAS_DIR / fname
-        print(f"\n⬇️ Downloading chroma {fname} ({round(duration)}s)")
+        dest = CHROMAS_DIR / safe_name
+        print(f"\n⬇️ Downloading chroma {safe_name} ({round(duration)}s)")
         try:
             await msg.download_media(file=str(dest))
             with open(LOG_FILE, "a", encoding="utf-8") as f:
                 now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                f.write(f"{now} - استخدمت الكروما: {fname}\n")
+                f.write(f"{now} - استخدمت الكروما: {safe_name}\n")
             new_files.append(dest)
         except Exception as e:
             print(f"⚠️ Failed: {e}")
+            with open(LOG_FILE, "a", encoding="utf-8") as f:
+                now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                f.write(f"{now} - ❌ فشل تحميل الكروما: {safe_name} ({e})\n")
             continue
 
         if len(new_files) >= DAILY_LIMIT:
             break
+
         await asyncio.sleep(DELAY)
 
     await client.disconnect()

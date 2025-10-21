@@ -103,19 +103,25 @@ def upload_file(service, path, folder_id):
 # -----------------------------
 # 📥 تحميل كرومات قصيرة من التلغرام (بأسمائها الأصلية + تنظيم السجل)
 # -----------------------------
+# -----------------------------
+# 📥 تحميل كرومات قصيرة من التلغرام (يعتمد على msg.id لتجنب التكرار)
+# -----------------------------
 async def fetch_chromas(api_id, api_hash, channel, session_path):
     client = TelegramClient(session_path, api_id, api_hash)
     await client.start()
 
-    # قراءة log.txt لتجنب التكرار
-    used_chromas = set()
+    # قراءة log.txt لتجنب تكرار نفس المعرف
+    used_ids = set()
     if LOG_FILE.exists():
         with open(LOG_FILE, "r", encoding="utf-8") as f:
             for line in f:
-                if "استخدمت الكروما:" in line:
-                    used_chromas.add(line.split("استخدمت الكروما:")[-1].strip())
+                if "msg_id=" in line:
+                    try:
+                        used_ids.add(int(line.split("msg_id=")[-1].strip()))
+                    except:
+                        continue
 
-    print(f"📜 {len(used_chromas)} chromas already used.")
+    print(f"📜 {len(used_ids)} chromas already used (by msg.id).")
     new_files = []
     MAX_DURATION = 60
     DAILY_LIMIT = 5
@@ -129,6 +135,10 @@ async def fetch_chromas(api_id, api_hash, channel, session_path):
 
     async for msg in client.iter_messages(channel, limit=None):
         if not (msg.video or msg.document):
+            continue
+
+        # إذا سبق استخدام المعرف، نتجاوزه
+        if msg.id in used_ids:
             continue
 
         # استخراج المدة
@@ -146,22 +156,20 @@ async def fetch_chromas(api_id, api_hash, channel, session_path):
         fname = msg.file.name or f"{msg.id}.mp4"
         safe_name = fname.replace(" ", "_").replace("/", "_")
 
-        if safe_name in used_chromas:
-            continue
-
         dest = CHROMAS_DIR / safe_name
-        print(f"\n⬇️ Downloading chroma {safe_name} ({round(duration)}s)")
+        print(f"\n⬇️ Downloading chroma {safe_name} (msg_id={msg.id}, {round(duration)}s)")
+
         try:
             await msg.download_media(file=str(dest))
+            now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             with open(LOG_FILE, "a", encoding="utf-8") as f:
-                now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                f.write(f"{now} - استخدمت الكروما: {safe_name}\n")
+                f.write(f"{now} - استخدمت الكروما: {safe_name} | msg_id={msg.id}\n")
             new_files.append(dest)
         except Exception as e:
             print(f"⚠️ Failed: {e}")
+            now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             with open(LOG_FILE, "a", encoding="utf-8") as f:
-                now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                f.write(f"{now} - ❌ فشل تحميل الكروما: {safe_name} ({e})\n")
+                f.write(f"{now} - ❌ فشل تحميل الكروما: {safe_name} | msg_id={msg.id} ({e})\n")
             continue
 
         if len(new_files) >= DAILY_LIMIT:

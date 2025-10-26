@@ -110,7 +110,6 @@ async def fetch_chromas(api_id, api_hash, channel, session_path):
     client = TelegramClient(session_path, api_id, api_hash)
     await client.start()
 
-    # قراءة log.txt لتجنب تكرار نفس المعرف
     used_ids = set()
     if LOG_FILE.exists():
         with open(LOG_FILE, "r", encoding="utf-8") as f:
@@ -127,49 +126,45 @@ async def fetch_chromas(api_id, api_hash, channel, session_path):
     DAILY_LIMIT = 5
     DELAY = 5
 
-    today = datetime.datetime.now().strftime("%Y-%m-%d")
-    new_day_header = f"\n📅 === بدء دفعة {today} ===\n"
-
-    with open(LOG_FILE, "a", encoding="utf-8") as f:
-        f.write(new_day_header)
-
     async for msg in client.iter_messages(channel, limit=None):
+        print(f"🆕 Checking msg {msg.id} ({msg.date}) file={msg.file.name}")
+
         if not (msg.video or msg.document):
+            print(f"⏭️ Skipping msg {msg.id} (no video/document)")
             continue
 
-        # إذا سبق استخدام المعرف، نتجاوزه
         if msg.id in used_ids:
+            print(f"⏭️ Skipping msg {msg.id} (already used)")
             continue
 
         # استخراج المدة
         duration = None
-        attrs = msg.video.attributes if msg.video else msg.document.attributes
-        for attr in attrs:
-            if isinstance(attr, DocumentAttributeVideo):
-                duration = attr.duration
-                break
+        try:
+            attrs = msg.video.attributes if msg.video else msg.document.attributes
+            for attr in attrs:
+                if isinstance(attr, DocumentAttributeVideo):
+                    duration = attr.duration
+                    break
+        except Exception:
+            pass
 
-        if not duration or duration > MAX_DURATION:
+        if duration and duration > MAX_DURATION:
+            print(f"⏭️ Skipping msg {msg.id} (too long: {duration}s)")
             continue
 
-        # 🧩 استخدم الاسم الأصلي للفيديو إن وجد
-        fname = msg.file.name or f"{msg.id}.mp4"
-        safe_name = fname.replace(" ", "_").replace("/", "_")
+        fname = msg.file.name or f"chroma_{msg.id}.mp4"
+        dest = CHROMAS_DIR / fname.replace(" ", "_").replace("/", "_")
 
-        dest = CHROMAS_DIR / safe_name
-        print(f"\n⬇️ Downloading chroma {safe_name} (msg_id={msg.id}, {round(duration)}s)")
+        print(f"⬇️ Downloading {fname} (msg_id={msg.id}, duration={duration})")
 
         try:
             await msg.download_media(file=str(dest))
             now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             with open(LOG_FILE, "a", encoding="utf-8") as f:
-                f.write(f"{now} - استخدمت الكروما: {safe_name} | msg_id={msg.id}\n")
+                f.write(f"{now} - استخدمت الكروما: {fname} | msg_id={msg.id}\n")
             new_files.append(dest)
         except Exception as e:
-            print(f"⚠️ Failed: {e}")
-            now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            with open(LOG_FILE, "a", encoding="utf-8") as f:
-                f.write(f"{now} - ❌ فشل تحميل الكروما: {safe_name} | msg_id={msg.id} ({e})\n")
+            print(f"⚠️ Failed to download msg {msg.id}: {e}")
             continue
 
         if len(new_files) >= DAILY_LIMIT:

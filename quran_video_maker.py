@@ -127,7 +127,7 @@ async def fetch_chromas(api_id, api_hash, channel, session_path):
     DELAY = 5
 
     async for msg in client.iter_messages(channel, limit=None):
-        print(f"🆕 Checking msg {msg.id} ({msg.date}) file={msg.file.name}")
+        print(f"🆕 Checking msg {msg.id} ({msg.date}) file={(msg.file.name if msg.file else 'بدون ملف')}")
 
         if not (msg.video or msg.document):
             print(f"⏭️ Skipping msg {msg.id} (no video/document)")

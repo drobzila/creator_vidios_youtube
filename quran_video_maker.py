@@ -22,9 +22,9 @@ api_id = 27874350
 api_hash = "a8cca90ec7d1023b8118163822f187c0"
 channel_username = "quranbng"
 
-CLIENT_ID = "507241336717-3eqd5gabnonsacdkog8fnjf3mh88gkun.apps.googleusercontent.com"
-CLIENT_SECRET = "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"
-REFRESH_TOKEN = "1//09SLS4A1oZYsJCgYIARAAGAkSNwF-L9IrQJneNmOVOAjihJWVMGFL2gYlLAdg0Y_0SZg4bQPjbRR-qkDKYvbSS4weE7zrPh8w4_E"
+CLIENT_ID = "601751497344-146gtpknc8jiddmifni0j1k26tuiudoo.apps.googleusercontent.com"
+CLIENT_SECRET = "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"
+REFRESH_TOKEN = "1//03JhDvr_EpSpcCgYIARAAGAMSNwF-L9Ircy_Edw5jzR3JAXIdBvPg2L9Vzjm-Jd610d4Y7b6IBGWP1Us5wDYH6oTKA8qJPGjxaqI"
 TOKEN_URI = "https://oauth2.googleapis.com/token"
 SCOPES = ["https://www.googleapis.com/auth/drive"]
 

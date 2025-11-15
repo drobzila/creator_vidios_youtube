@@ -1,4 +1,4 @@
-name: Write Salam to log.txt
+name: Write Salam to videos.txt
 
 on:
   push:
@@ -17,14 +17,14 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Write "السلام عليكم" to log.txt
+      - name: Write "السلام عليكم" to videos.txt
         run: |
-          echo "السلام عليكم ورحمة الله وبركاته 🌸 - $(date '+%Y-%m-%d %H:%M:%S')" >> log.txt
+          echo "السلام عليكم ورحمة الله وبركاته 🌸 - $(date '+%Y-%m-%d %H:%M:%S')" >> videos.txt
 
       - name: Commit and push changes
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git add log.txt
-          git commit -m "🤍 أُضيف سطر سلام جديد إلى log.txt" || echo "No changes to commit"
+          git add videos.txt
+          git commit -m "🤍 أُضيف سطر سلام جديد إلى videos.txt" || echo "No changes to commit"
           git push

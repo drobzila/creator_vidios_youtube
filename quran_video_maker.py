@@ -24,7 +24,7 @@ channel_username = "quranbng"
 
 CLIENT_ID = "108880269998-29mupf5siumdovf83irg7ocqgkd8q21n.apps.googleusercontent.com"
 CLIENT_SECRET = "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"
-REFRESH_TOKEN = "1//04eSUNf4_LX0MCgYIARAAGAQSNwF-L9IrcxJYhclaMQiu2dI9wFLHErHjiyTBfIYssn8zmhMUn0mGoFEhwWRyE3FWe1iO_P-zRpU"
+REFRESH_TOKEN = "1//04RkwzILFy8PrCgYIARAAGAQSNwF-L9IrqUH2JvjOxYb0KBXCDfJQM8QpaMEKgyvoq5eVrGM0-vnuVBzy-C42WuZ01ma69jNDlJ4"
 TOKEN_URI = "https://oauth2.googleapis.com/token"
 SCOPES = ["https://www.googleapis.com/auth/drive"]
 

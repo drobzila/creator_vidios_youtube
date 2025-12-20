@@ -343,30 +343,24 @@ async def main():
             download_file(drive, bg["id"], str(dest))
 
     bg_list = list(BACKGROUND_DIR.glob("*.mp4"))
-for chroma in chromas:
-    # مسار الفيديو النهائي بعد الدمج
-    merged_path = OUTPUTS_DIR / f"merged_{chroma.stem}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
-    
-    try:
-        # دمج الكروما مع الخلفيات
-        merge(chroma, bg_list, merged_path)
-        print(f"✅ Created {merged_path.name}")
 
-        # إضافة النص العربي المتصل مع Glow
-        final_path = OUTPUTS_DIR / f"final_{chroma.stem}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
-        add_arabic_text_to_video(merged_path, final_path, "اشترك في قناة نسمات القرآن ❤️")
-        print(f"📝 Added Arabic text: {final_path.name}")
+    # --- هنا الحلقة داخل main() ---
+    for chroma in chromas:
+        merged_path = OUTPUTS_DIR / f"merged_{chroma.stem}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
+        try:
+            merge(chroma, bg_list, merged_path)
+            print(f"✅ Created {merged_path.name}")
 
-        # رفع الفيديو النهائي إلى Google Drive
-        fid = upload_file(drive, final_path, DRIVE_OUTPUT_FOLDER_ID)
-        print(f"☁️ Uploaded {fid}")
+            final_path = OUTPUTS_DIR / f"final_{chroma.stem}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
+            add_arabic_text_to_video(merged_path, final_path, "اشترك في قناة نسمات القرآن ❤️")
+            print(f"📝 Added Arabic text: {final_path.name}")
 
-        # حذف الفيديو المؤقت المدمج بدون نص
-        merged_path.unlink()
-        
-    except Exception as e:
-        print(f"❌ Error {chroma.name}: {e}")
+            fid = upload_file(drive, final_path, DRIVE_OUTPUT_FOLDER_ID)
+            print(f"☁️ Uploaded {fid}")
 
+            merged_path.unlink()
+        except Exception as e:
+            print(f"❌ Error {chroma.name}: {e}")
 
     # رفع السجل إلى GitHub
     try:

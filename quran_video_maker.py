@@ -14,11 +14,6 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload, MediaFileUpload
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
-from moviepy.editor import VideoFileClip, CompositeVideoClip, ImageClip
-from PIL import Image, ImageDraw, ImageFont
-import numpy as np
-import arabic_reshaper
-from bidi.algorithm import get_display
 
 # -----------------------------
 # 🔧 الإعدادات
@@ -273,53 +268,6 @@ def merge(chroma, bg_list, output):
     os.remove(tmp_bg_scaled)
     os.remove(tmp_chroma)
 
-def add_arabic_text_to_video(input_path, output_path, text_content):
-    video = VideoFileClip(str(input_path))
-
-    # إعادة تشكيل النص العربي
-    reshaped_text = arabic_reshaper.reshape(text_content)
-    bidi_text = get_display(reshaped_text)
-
-    font_path = r"C:\Windows\Fonts\majalla.ttf"
-    fontsize = 50
-    font = ImageFont.truetype(font_path, fontsize)
-
-    # إنشاء صورة للنص
-    txt_img = Image.new("RGBA", (video.w, 200), (0,0,0,0))
-    draw = ImageDraw.Draw(txt_img)
-
-    bbox = draw.textbbox((0,0), bidi_text, font=font)
-    text_width = bbox[2] - bbox[0]
-    text_height = bbox[3] - bbox[1]
-
-    # تصغير النص إذا خرج عن الإطار
-    if text_width > video.w - 40:
-        fontsize = int(fontsize * (video.w - 40) / text_width)
-        font = ImageFont.truetype(font_path, fontsize)
-        bbox = draw.textbbox((0,0), bidi_text, font=font)
-        text_width = bbox[2] - bbox[0]
-        text_height = bbox[3] - bbox[1]
-
-    x = (video.w - text_width)//2
-    y = 20
-
-    # رسم Glow
-    for offset in range(1,5):
-        draw.text((x-offset, y), bidi_text, font=font, fill="black")
-        draw.text((x+offset, y), bidi_text, font=font, fill="black")
-        draw.text((x, y-offset), bidi_text, font=font, fill="black")
-        draw.text((x, y+offset), bidi_text, font=font, fill="black")
-
-    # النص الأصلي باللون الأبيض
-    draw.text((x, y), bidi_text, font=font, fill="white")
-
-    txt_clip = ImageClip(np.array(txt_img)).set_duration(video.duration)
-    txt_clip = txt_clip.set_position(("center", video.h - txt_clip.h - 50))
-
-    final = CompositeVideoClip([video, txt_clip])
-    final.write_videofile(str(output_path), fps=24, codec="libx264", audio_codec="aac")
-
-
 # -----------------------------
 # 🚀 Main
 # -----------------------------
@@ -343,22 +291,13 @@ async def main():
             download_file(drive, bg["id"], str(dest))
 
     bg_list = list(BACKGROUND_DIR.glob("*.mp4"))
-
-    # --- هنا الحلقة داخل main() ---
     for chroma in chromas:
-        merged_path = OUTPUTS_DIR / f"merged_{chroma.stem}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
+        out_path = OUTPUTS_DIR / f"final_{chroma.stem}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
         try:
-            merge(chroma, bg_list, merged_path)
-            print(f"✅ Created {merged_path.name}")
-
-            final_path = OUTPUTS_DIR / f"final_{chroma.stem}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
-            add_arabic_text_to_video(merged_path, final_path, "اشترك في قناة نسمات القرآن ❤️")
-            print(f"📝 Added Arabic text: {final_path.name}")
-
-            fid = upload_file(drive, final_path, DRIVE_OUTPUT_FOLDER_ID)
+            merge(chroma, bg_list, out_path)
+            print(f"✅ Created {out_path.name}")
+            fid = upload_file(drive, out_path, DRIVE_OUTPUT_FOLDER_ID)
             print(f"☁️ Uploaded {fid}")
-
-            merged_path.unlink()
         except Exception as e:
             print(f"❌ Error {chroma.name}: {e}")
 

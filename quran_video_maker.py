@@ -20,7 +20,7 @@ from google.auth.transport.requests import Request
 # -----------------------------
 api_id = 27874350
 api_hash = "a8cca90ec7d1023b8118163822f187c0"
-channel_username = "islambng"
+channel_username = "quranbng"
 
 CLIENT_ID = "108880269998-bcjare6v388kucan7amb82q370m61pq5.apps.googleusercontent.com"
 CLIENT_SECRET = "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"

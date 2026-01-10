@@ -2,8 +2,8 @@
 # -*- coding: utf-8 -*-
 
 """
-📽️ Quran Video Maker — Viral Optimized (≤ 20s) + Multi-background
-By Mohamed — Optimized for Shorts / Reels / TikTok
+📽️ Quran Video Maker — Multi-background Support (≤ 60s)
+By Mohamed — Works with GitHub Actions
 """
 
 import os, io, sys, base64, asyncio, random, datetime, tempfile, subprocess
@@ -22,9 +22,9 @@ api_id = 27874350
 api_hash = "a8cca90ec7d1023b8118163822f187c0"
 channel_username = "quranbng"
 
-CLIENT_ID = "108880269998-bcjare6v388kucan7amb82q370m61pq5.apps.googleusercontent.com" 
-CLIENT_SECRET = "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" 
-REFRESH_TOKEN = "1//03JHjFKSZ6V56CgYIARAAGAMSNwF-L9Ir4ZVvnpbx64vKup8pkXuspIxGBlmEAguJjweg6hzYGjU8U4l_oGLZJuArjcqRSW2HTB0" 
+CLIENT_ID = "108880269998-bcjare6v388kucan7amb82q370m61pq5.apps.googleusercontent.com"
+CLIENT_SECRET = "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"
+REFRESH_TOKEN = "1//03JHjFKSZ6V56CgYIARAAGAMSNwF-L9Ir4ZVvnpbx64vKup8pkXuspIxGBlmEAguJjweg6hzYGjU8U4l_oGLZJuArjcqRSW2HTB0"
 TOKEN_URI = "https://oauth2.googleapis.com/token"
 SCOPES = ["https://www.googleapis.com/auth/drive"]
 
@@ -101,7 +101,10 @@ def upload_file(service, path, folder_id):
     return file["id"]
 
 # -----------------------------
-# 📥 تحميل كرومات قصيرة من التلغرام
+# 📥 تحميل كرومات قصيرة من التلغرام (بأسمائها الأصلية + تنظيم السجل)
+# -----------------------------
+# -----------------------------
+# 📥 تحميل كرومات قصيرة من التلغرام (يعتمد على msg.id لتجنب التكرار)
 # -----------------------------
 async def fetch_chromas(api_id, api_hash, channel, session_path):
     client = TelegramClient(session_path, api_id, api_hash)
@@ -119,16 +122,22 @@ async def fetch_chromas(api_id, api_hash, channel, session_path):
 
     print(f"📜 {len(used_ids)} chromas already used (by msg.id).")
     new_files = []
-    MAX_DURATION = 20  # optimized for Shorts
+    MAX_DURATION = 60
     DAILY_LIMIT = 5
     DELAY = 5
 
     async for msg in client.iter_messages(channel, limit=None):
+        print(f"🆕 Checking msg {msg.id} ({msg.date}) file={(msg.file.name if msg.file else 'بدون ملف')}")
+
         if not (msg.video or msg.document):
-            continue
-        if msg.id in used_ids:
+            print(f"⏭️ Skipping msg {msg.id} (no video/document)")
             continue
 
+        if msg.id in used_ids:
+            print(f"⏭️ Skipping msg {msg.id} (already used)")
+            continue
+
+        # استخراج المدة
         duration = None
         try:
             attrs = msg.video.attributes if msg.video else msg.document.attributes
@@ -140,10 +149,13 @@ async def fetch_chromas(api_id, api_hash, channel, session_path):
             pass
 
         if duration and duration > MAX_DURATION:
+            print(f"⏭️ Skipping msg {msg.id} (too long: {duration}s)")
             continue
 
         fname = msg.file.name or f"chroma_{msg.id}.mp4"
         dest = CHROMAS_DIR / fname.replace(" ", "_").replace("/", "_")
+
+        print(f"⬇️ Downloading {fname} (msg_id={msg.id}, duration={duration})")
 
         try:
             await msg.download_media(file=str(dest))
@@ -151,7 +163,8 @@ async def fetch_chromas(api_id, api_hash, channel, session_path):
             with open(LOG_FILE, "a", encoding="utf-8") as f:
                 f.write(f"{now} - استخدمت الكروما: {fname} | msg_id={msg.id}\n")
             new_files.append(dest)
-        except:
+        except Exception as e:
+            print(f"⚠️ Failed to download msg {msg.id}: {e}")
             continue
 
         if len(new_files) >= DAILY_LIMIT:
@@ -166,7 +179,13 @@ async def fetch_chromas(api_id, api_hash, channel, session_path):
 # ⏱️ حساب مدة الفيديو
 # -----------------------------
 def get_duration(path):
-    cmd = ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", str(path)]
+    """إرجاع مدة الفيديو بالثواني"""
+    cmd = [
+        "ffprobe", "-v", "error",
+        "-show_entries", "format=duration",
+        "-of", "default=noprint_wrappers=1:nokey=1",
+        str(path),
+    ]
     out = subprocess.run(cmd, capture_output=True, text=True)
     try:
         return float(out.stdout.strip())
@@ -174,101 +193,125 @@ def get_duration(path):
         return 0.0
 
 # -----------------------------
-# 🎬 دمج + تحسين للفيديوهات المنتشرة
+# 🎬 الدمج بعدة خلفيات
 # -----------------------------
 def merge(chroma, bg_list, output):
     chroma_dur = get_duration(chroma)
     if chroma_dur <= 0:
+        print(f"⚠️ الكروما {chroma} غير صالحة (مدة = {chroma_dur})")
         return
 
-    # اختيار خلفية أو أكثر لتغطية طول الكروما
+    # 🎲 اختيار خلفية عشوائية
     valid_bgs = [b for b in bg_list if get_duration(b) > 0]
     if not valid_bgs:
+        print("⚠️ لا توجد خلفيات صالحة.")
         return
 
-    selected_bgs = []
-    total_duration = 0
-    while total_duration < chroma_dur:
-        bg = random.choice(valid_bgs)
-        selected_bgs.append(bg)
-        total_duration += get_duration(bg)
+    bg = random.choice(valid_bgs)
+    bg_dur = get_duration(bg)
+    print(f"🎲 تم اختيار الخلفية العشوائية: {bg.name} ({round(bg_dur)}s)")
 
-    # دمج الخلفيات مع Crossfade
+    # ⚙️ في حال الخلفية أقصر من الكروما → نختار خلفيات أخرى لإكمال الطول
+    total_duration = bg_dur
+    selected_bgs = [bg]
+
+    while total_duration < chroma_dur:
+        next_bg = random.choice(valid_bgs)
+        total_duration += get_duration(next_bg)
+        selected_bgs.append(next_bg)
+
+    # 🧩 دمج الخلفيات المختارة في فيديو واحد مؤقت
     bg_list_txt = tempfile.NamedTemporaryFile(mode="w+", delete=False, suffix=".txt")
     for bg in selected_bgs:
         bg_list_txt.write(f"file '{bg.resolve()}'\n")
     bg_list_txt.close()
 
     tmp_bg = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False).name
-    subprocess.run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", bg_list_txt.name, "-c", "copy", tmp_bg], check=True)
+    subprocess.run([
+        "ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", bg_list_txt.name,
+        "-t", str(chroma_dur),
+        "-c", "copy", tmp_bg
+    ], check=True)
     os.remove(bg_list_txt.name)
 
+    # 🎨 تهيئة الخلفية بدقة 1080x1920
     tmp_bg_scaled = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False).name
     subprocess.run([
         "ffmpeg", "-y", "-i", tmp_bg,
-        "-vf", "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2,setsar=1,vignette=PI/4",
-        "-preset", "fast", "-crf", "23", tmp_bg_scaled
+        "-vf", "scale=1080:1920:force_original_aspect_ratio=decrease,"
+               "pad=1080:1920:(ow-iw)/2:(oh-ih)/2,setsar=1",
+        "-an", "-preset", "fast", "-crf", "23", tmp_bg_scaled
     ], check=True)
     os.remove(tmp_bg)
 
-    # تجهيز الكروما
+    # 🎬 تجهيز الكروما
     tmp_chroma = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False).name
     subprocess.run([
         "ffmpeg", "-y", "-i", str(chroma),
-        "-vf", "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2,setsar=1,eq=contrast=1.1:saturation=1.15:brightness=0.02",
+        "-vf", "scale=1080:1920:force_original_aspect_ratio=decrease,"
+               "pad=1080:1920:(ow-iw)/2:(oh-ih)/2,setsar=1",
         "-c:v", "libx264", "-preset", "fast", "-crf", "23",
         "-c:a", "aac", "-b:a", "128k", tmp_chroma
     ], check=True)
 
-    # دمج الكروما مع الخلفية
-    tmp_final = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False).name
+    # 🧩 الدمج النهائي بين الخلفية والكروما
     subprocess.run([
         "ffmpeg", "-y", "-i", tmp_bg_scaled, "-i", tmp_chroma,
-        "-filter_complex", "[1:v]colorkey=0x000000:0.3:0.2[ck];[0:v][ck]overlay[outv]",
+        "-filter_complex",
+        "[1:v]colorkey=0x000000:0.3:0.2[ck];[0:v][ck]overlay[outv]",
         "-map", "[outv]", "-map", "1:a?",
         "-c:v", "libx264", "-preset", "fast", "-crf", "23",
-        "-c:a", "aac", "-b:a", "128k", tmp_final
+        "-c:a", "aac", "-b:a", "128k", str(output)
     ], check=True)
 
-    # إضافة نص آية متحرك في منتصف الفيديو (Hook + Captions)
-    subprocess.run([
-        "ffmpeg", "-y", "-i", tmp_final,
-        "-vf", "drawtext=text='﴿ إِنَّ مَعَ الْعُسْرِ يُسْرًا ﴾':fontfile=Amiri-Bold.ttf:fontsize=64:fontcolor=white:x=(w-text_w)/2:y=h*0.75:box=1:boxcolor=black@0.4:boxborderw=20:enable='between(t,0,5)'",
-        "-c:a", "copy", str(output)
-    ], check=True)
-
+    # 🧹 تنظيف الملفات المؤقتة
     os.remove(tmp_bg_scaled)
     os.remove(tmp_chroma)
-    os.remove(tmp_final)
 
 # -----------------------------
 # 🚀 Main
 # -----------------------------
 async def main():
+    print("🚀 Quran Video Maker started.")
     session_path = ensure_telegram_session()
     drive = get_drive_service()
 
+    print("📥 Fetching new chromas...")
     chromas = await fetch_chromas(api_id, api_hash, channel_username, session_path)
     if not chromas:
         print("⚠️ No new chromas today.")
         return
 
-    # Sync backgrounds
+    print("☁️ Syncing backgrounds...")
     bg_files = list_drive_files(drive, DRIVE_BG_FOLDER_ID)
     for bg in bg_files:
         dest = BACKGROUND_DIR / bg["name"]
         if not dest.exists():
+            print(f"⬇️ Downloading {bg['name']}")
             download_file(drive, bg["id"], str(dest))
 
     bg_list = list(BACKGROUND_DIR.glob("*.mp4"))
     for chroma in chromas:
-        out_path = OUTPUTS_DIR / f"viral_{chroma.stem}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
+        out_path = OUTPUTS_DIR / f"final_{chroma.stem}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
         try:
             merge(chroma, bg_list, out_path)
+            print(f"✅ Created {out_path.name}")
             fid = upload_file(drive, out_path, DRIVE_OUTPUT_FOLDER_ID)
-            print(f"✅ Created & uploaded {out_path.name} -> {fid}")
+            print(f"☁️ Uploaded {fid}")
         except Exception as e:
             print(f"❌ Error {chroma.name}: {e}")
+
+    # رفع السجل إلى GitHub
+    try:
+        subprocess.run(["git", "pull", "--rebase"], check=False)
+        subprocess.run(["git", "add", "log.txt"], check=True)
+        subprocess.run(["git", "commit", "-m", "🪶 تحديث سجل الكرومات"], check=False)
+        subprocess.run(["git", "push"], check=True)
+        print("✅ log.txt pushed.")
+    except Exception as e:
+        print(f"❌ Push failed: {e}")
+
+    print("🏁 Done!")
 
 if __name__ == "__main__":
     try:

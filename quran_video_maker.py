@@ -2,8 +2,8 @@
 # -*- coding: utf-8 -*-
 
 """
-📽️ Quran Video Maker — Multi-background Support (≤ 60s)
-By Mohamed — Works with GitHub Actions
+📽️ Quran Video Maker — Multi-background Support (≤ 60s) — H.265 Edition
+By Mohamed
 """
 
 import os, io, sys, base64, asyncio, random, datetime, tempfile, subprocess
@@ -101,10 +101,7 @@ def upload_file(service, path, folder_id):
     return file["id"]
 
 # -----------------------------
-# 📥 تحميل كرومات قصيرة من التلغرام (بأسمائها الأصلية + تنظيم السجل)
-# -----------------------------
-# -----------------------------
-# 📥 تحميل كرومات قصيرة من التلغرام (يعتمد على msg.id لتجنب التكرار)
+# 📥 تحميل كرومات قصيرة من التلغرام
 # -----------------------------
 async def fetch_chromas(api_id, api_hash, channel, session_path):
     client = TelegramClient(session_path, api_id, api_hash)
@@ -137,7 +134,6 @@ async def fetch_chromas(api_id, api_hash, channel, session_path):
             print(f"⏭️ Skipping msg {msg.id} (already used)")
             continue
 
-        # استخراج المدة
         duration = None
         try:
             attrs = msg.video.attributes if msg.video else msg.document.attributes
@@ -179,7 +175,6 @@ async def fetch_chromas(api_id, api_hash, channel, session_path):
 # ⏱️ حساب مدة الفيديو
 # -----------------------------
 def get_duration(path):
-    """إرجاع مدة الفيديو بالثواني"""
     cmd = [
         "ffprobe", "-v", "error",
         "-show_entries", "format=duration",
@@ -193,7 +188,7 @@ def get_duration(path):
         return 0.0
 
 # -----------------------------
-# 🎬 الدمج بعدة خلفيات
+# 🎬 الدمج بعدة خلفيات + ترميز H.265
 # -----------------------------
 def merge(chroma, bg_list, output):
     chroma_dur = get_duration(chroma)
@@ -201,7 +196,6 @@ def merge(chroma, bg_list, output):
         print(f"⚠️ الكروما {chroma} غير صالحة (مدة = {chroma_dur})")
         return
 
-    # 🎲 اختيار خلفية عشوائية
     valid_bgs = [b for b in bg_list if get_duration(b) > 0]
     if not valid_bgs:
         print("⚠️ لا توجد خلفيات صالحة.")
@@ -211,7 +205,6 @@ def merge(chroma, bg_list, output):
     bg_dur = get_duration(bg)
     print(f"🎲 تم اختيار الخلفية العشوائية: {bg.name} ({round(bg_dur)}s)")
 
-    # ⚙️ في حال الخلفية أقصر من الكروما → نختار خلفيات أخرى لإكمال الطول
     total_duration = bg_dur
     selected_bgs = [bg]
 
@@ -220,7 +213,6 @@ def merge(chroma, bg_list, output):
         total_duration += get_duration(next_bg)
         selected_bgs.append(next_bg)
 
-    # 🧩 دمج الخلفيات المختارة في فيديو واحد مؤقت
     bg_list_txt = tempfile.NamedTemporaryFile(mode="w+", delete=False, suffix=".txt")
     for bg in selected_bgs:
         bg_list_txt.write(f"file '{bg.resolve()}'\n")
@@ -234,7 +226,6 @@ def merge(chroma, bg_list, output):
     ], check=True)
     os.remove(bg_list_txt.name)
 
-    # 🎨 تهيئة الخلفية بدقة 1080x1920
     tmp_bg_scaled = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False).name
     subprocess.run([
         "ffmpeg", "-y", "-i", tmp_bg,
@@ -244,27 +235,24 @@ def merge(chroma, bg_list, output):
     ], check=True)
     os.remove(tmp_bg)
 
-    # 🎬 تجهيز الكروما
     tmp_chroma = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False).name
     subprocess.run([
         "ffmpeg", "-y", "-i", str(chroma),
         "-vf", "scale=1080:1920:force_original_aspect_ratio=decrease,"
                "pad=1080:1920:(ow-iw)/2:(oh-ih)/2,setsar=1",
-        "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+        "-c:v", "libx265", "-preset", "fast", "-crf", "23",  # H.265
         "-c:a", "aac", "-b:a", "128k", tmp_chroma
     ], check=True)
 
-    # 🧩 الدمج النهائي بين الخلفية والكروما
     subprocess.run([
         "ffmpeg", "-y", "-i", tmp_bg_scaled, "-i", tmp_chroma,
         "-filter_complex",
         "[1:v]colorkey=0x000000:0.3:0.2[ck];[0:v][ck]overlay[outv]",
         "-map", "[outv]", "-map", "1:a?",
-        "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+        "-c:v", "libx265", "-preset", "fast", "-crf", "23",  # H.265
         "-c:a", "aac", "-b:a", "128k", str(output)
     ], check=True)
 
-    # 🧹 تنظيف الملفات المؤقتة
     os.remove(tmp_bg_scaled)
     os.remove(tmp_chroma)
 
@@ -301,7 +289,6 @@ async def main():
         except Exception as e:
             print(f"❌ Error {chroma.name}: {e}")
 
-    # رفع السجل إلى GitHub
     try:
         subprocess.run(["git", "pull", "--rebase"], check=False)
         subprocess.run(["git", "add", "log.txt"], check=True)
